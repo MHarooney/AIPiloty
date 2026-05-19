@@ -8,6 +8,7 @@ import 'package:dio/dio.dart';
 import '../../core/config/app_config.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/sse_client.dart';
+import '../../core/providers/session_provider.dart';
 
 /// Status of a single tool execution.
 enum ToolStatus { running, success, error }
@@ -48,6 +49,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _busy = false;
   String? _sessionKey;
   String? _toolStatus;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final key = ref.read(activeSessionKeyProvider);
+      if (key != null && key.isNotEmpty) {
+        setState(() => _sessionKey = key);
+        ref.read(activeSessionKeyProvider.notifier).state = null;
+      }
+    });
+  }
 
   @override
   void dispose() {

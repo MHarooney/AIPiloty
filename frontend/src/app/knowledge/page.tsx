@@ -107,7 +107,7 @@ export default function KnowledgePage() {
                 <Database size={16} className="text-blue-400" />
                 <span className="text-sm font-medium text-gray-200">Native RAG (Qdrant + Ollama Embeddings)</span>
               </div>
-              <div className="grid grid-cols-3 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <div className={cn(
                   "flex items-center gap-1.5 px-3 py-2 rounded-lg border",
                   qdrantOk

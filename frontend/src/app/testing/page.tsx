@@ -83,14 +83,14 @@ export default function TestingPage() {
         </div>
 
         {/* ── Main content: chat (60%) + right panel (40%) ── */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* Chat panel */}
-          <div className="flex-[3] min-w-0 border-r border-gray-800/50 overflow-hidden flex flex-col">
+          <div className="flex-1 md:flex-[3] min-w-0 border-b md:border-b-0 border-r-0 md:border-r border-gray-800/50 overflow-hidden flex flex-col">
             <TestingChatPanel />
           </div>
 
           {/* Right panel: tabbed Results / Browser */}
-          <div className="flex-[2] min-w-0 overflow-hidden flex flex-col">
+          <div className="flex-1 md:flex-[2] min-w-0 overflow-hidden flex flex-col">
             {/* Tab switcher */}
             <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-800/50 flex-shrink-0 bg-gray-950/40">
               <button

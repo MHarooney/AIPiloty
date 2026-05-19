@@ -3,9 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 
 import '../../core/network/api_client.dart';
+import '../../core/providers/session_provider.dart';
 
 class SessionsScreen extends ConsumerStatefulWidget {
-  const SessionsScreen({super.key});
+  const SessionsScreen({super.key, this.onSwitchToChat});
+
+  /// Called after writing [activeSessionKeyProvider] so HomeShell can switch tabs.
+  final VoidCallback? onSwitchToChat;
 
   @override
   ConsumerState<SessionsScreen> createState() => _SessionsScreenState();
@@ -134,10 +138,8 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               subtitle: Text('$msgCount messages • $created'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                      content: Text('Session: $key\nUse Chat tab to resume.')),
-                );
+                ref.read(activeSessionKeyProvider.notifier).state = key.toString();
+                widget.onSwitchToChat?.call();
               },
             ),
           );

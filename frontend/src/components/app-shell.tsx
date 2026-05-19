@@ -7,7 +7,8 @@ import SystemHeartbeat from "./system-heartbeat";
 import SettingsPanel from "./settings-panel";
 import CommandPalette from "./command-palette";
 import ActivityQueue from "./activity-queue";
-import { Menu } from "lucide-react";
+import MobileTopBar from "./mobile-top-bar";
+import MobileBottomNav from "./mobile-bottom-nav";
 import { useChatStore } from "@/stores/chat-store";
 import { cn } from "@/lib/utils";
 import { getStoredToken } from "@/lib/api";
@@ -43,15 +44,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* System heartbeat — deep background z-0 */}
       <SystemHeartbeat />
-
-      {/* Mobile hamburger */}
-      <button
-        onClick={() => setMobileOpen(true)}
-        className="md:hidden fixed top-3 left-3 z-40 p-2 rounded-lg bg-gray-900/90 border border-gray-800/50 text-gray-400 hover:text-gray-200 transition-colors"
-        aria-label="Open menu"
-      >
-        <Menu size={20} />
-      </button>
 
       {/* Backdrop */}
       {mobileOpen && (
@@ -101,14 +93,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           aria-hidden
         />
 
-        {/* Chat layer (z-30) */}
+        {/* Content layer */}
         <div className={cn(
-          "relative z-10 flex flex-col flex-1 min-h-0 min-w-0 transition-all duration-500",
+          "relative z-10 flex flex-col flex-1 min-h-0 min-w-0 transition-all duration-500 pb-16 md:pb-0",
           systemState === "waiting_approval" && "time-dilation"
         )}>
+          <MobileTopBar onMenuOpen={() => setMobileOpen(true)} />
           {children}
         </div>
       </main>
+
+      {/* Mobile bottom navigation */}
+      <MobileBottomNav onMoreOpen={() => setMobileOpen(true)} />
 
       {/* Settings panel overlay */}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />

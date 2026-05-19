@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { BookMarked, MessageSquare, Eye, Database, Sparkles, FileStack } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { cn } from "@/lib/utils";
@@ -14,9 +14,19 @@ import DocStudioStudioPanel from "@/components/doc-studio/doc-studio-studio-pane
 
 const PANEL_HEADER = "flex items-center gap-2 px-4 py-3 border-b border-gray-700/40 flex-shrink-0";
 
+type MobilePanel = "sources" | "chat" | "preview" | "studio";
+
+const MOBILE_TABS: { id: MobilePanel; label: string; icon: React.ElementType }[] = [
+  { id: "sources", label: "Sources", icon: Database },
+  { id: "chat",    label: "Chat",    icon: MessageSquare },
+  { id: "preview", label: "Preview", icon: Eye },
+  { id: "studio",  label: "Studio",  icon: Sparkles },
+];
+
 export default function DocStudioPage() {
   const { t } = useI18n();
   const { currentNotebookId, loadNotebooks, activeTab, setActiveTab } = useDocStudioStore();
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("chat");
 
   useEffect(() => { loadNotebooks(); }, []);
 
@@ -53,67 +63,97 @@ export default function DocStudioPage() {
             </div>
           </div>
         ) : (
-          /* 3-column layout */
-          <div className="flex-1 grid grid-cols-[280px_1fr_280px] min-h-0 divide-x divide-gray-800/60">
-
-            {/* ── Col 1: Sources ─────────────────────────────────── */}
-            <div className="flex flex-col min-h-0 bg-gray-950/30">
-              <div className={PANEL_HEADER}>
-                <div className="w-5 h-5 rounded-md bg-violet-500/20 flex items-center justify-center">
-                  <Database className="w-3 h-3 text-violet-400" />
-                </div>
-                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Sources</span>
+        /* ── Mobile layout ──────────────────────────────────── */
+          <>
+            <div className="md:hidden flex flex-col flex-1 min-h-0">
+              {/* Active panel content */}
+              <div className="flex-1 overflow-hidden p-3">
+                {mobilePanel === "sources"  && <DocStudioSourcesPanel />}
+                {mobilePanel === "chat"     && <DocStudioChatPanel notebookId={currentNotebookId} />}
+                {mobilePanel === "preview"  && <DocStudioArtifactPreview notebookId={currentNotebookId} />}
+                {mobilePanel === "studio"   && <DocStudioStudioPanel notebookId={currentNotebookId} />}
               </div>
-              <div className="flex-1 overflow-hidden p-4">
-                <DocStudioSourcesPanel />
-              </div>
-            </div>
 
-            {/* ── Col 2: Chat + Preview ──────────────────────────── */}
-            <div className="flex flex-col min-h-0">
-              {/* Tab bar */}
-              <div className={cn(PANEL_HEADER, "gap-0 p-0")}>
-                {[
-                  { id: "chat",    label: "Chat",    icon: MessageSquare },
-                  { id: "preview", label: "Preview", icon: Eye },
-                ].map(({ id, label, icon: Icon }) => (
+              {/* Mobile tab switcher */}
+              <div className="flex border-t border-gray-800/60 bg-gray-950/80 flex-shrink-0">
+                {MOBILE_TABS.map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
-                    onClick={() => setActiveTab(id as "chat" | "preview")}
+                    onClick={() => setMobilePanel(id)}
                     className={cn(
-                      "flex items-center gap-1.5 px-5 py-3 text-xs font-semibold border-b-2 transition-colors",
-                      activeTab === id
-                        ? "border-indigo-500 text-indigo-300 bg-indigo-500/5"
-                        : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30"
+                      "flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 text-[10px] font-semibold transition-colors",
+                      mobilePanel === id ? "text-indigo-400" : "text-gray-600 hover:text-gray-400"
                     )}
                   >
-                    <Icon className="w-3.5 h-3.5" />
+                    <Icon className="w-4 h-4" />
                     {label}
                   </button>
                 ))}
               </div>
-              <div className="flex-1 overflow-hidden p-4">
-                {activeTab === "chat"
-                  ? <DocStudioChatPanel notebookId={currentNotebookId} />
-                  : <DocStudioArtifactPreview notebookId={currentNotebookId} />
-                }
-              </div>
             </div>
 
-            {/* ── Col 3: Studio ──────────────────────────────────── */}
-            <div className="flex flex-col min-h-0 bg-gray-950/30">
-              <div className={PANEL_HEADER}>
-                <div className="w-5 h-5 rounded-md bg-indigo-500/20 flex items-center justify-center">
-                  <Sparkles className="w-3 h-3 text-indigo-400" />
+            {/* ── Desktop: 3-column layout ─────────────────────── */}
+            <div className="hidden md:grid flex-1 grid-cols-[280px_1fr_280px] min-h-0 divide-x divide-gray-800/60">
+
+              {/* ── Col 1: Sources ─────────────────────────────────── */}
+              <div className="flex flex-col min-h-0 bg-gray-950/30">
+                <div className={PANEL_HEADER}>
+                  <div className="w-5 h-5 rounded-md bg-violet-500/20 flex items-center justify-center">
+                    <Database className="w-3 h-3 text-violet-400" />
+                  </div>
+                  <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Sources</span>
                 </div>
-                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Studio</span>
+                <div className="flex-1 overflow-hidden p-4">
+                  <DocStudioSourcesPanel />
+                </div>
               </div>
-              <div className="flex-1 overflow-hidden p-4">
-                <DocStudioStudioPanel notebookId={currentNotebookId} />
-              </div>
-            </div>
 
-          </div>
+              {/* ── Col 2: Chat + Preview ──────────────────────────── */}
+              <div className="flex flex-col min-h-0">
+                {/* Tab bar */}
+                <div className={cn(PANEL_HEADER, "gap-0 p-0")}>
+                  {[
+                    { id: "chat",    label: "Chat",    icon: MessageSquare },
+                    { id: "preview", label: "Preview", icon: Eye },
+                  ].map(({ id, label, icon: Icon }) => (
+                    <button
+                      key={id}
+                      onClick={() => setActiveTab(id as "chat" | "preview")}
+                      className={cn(
+                        "flex items-center gap-1.5 px-5 py-3 text-xs font-semibold border-b-2 transition-colors",
+                        activeTab === id
+                          ? "border-indigo-500 text-indigo-300 bg-indigo-500/5"
+                          : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30"
+                      )}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex-1 overflow-hidden p-4">
+                  {activeTab === "chat"
+                    ? <DocStudioChatPanel notebookId={currentNotebookId} />
+                    : <DocStudioArtifactPreview notebookId={currentNotebookId} />
+                  }
+                </div>
+              </div>
+
+              {/* ── Col 3: Studio ──────────────────────────────────── */}
+              <div className="flex flex-col min-h-0 bg-gray-950/30">
+                <div className={PANEL_HEADER}>
+                  <div className="w-5 h-5 rounded-md bg-indigo-500/20 flex items-center justify-center">
+                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                  </div>
+                  <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Studio</span>
+                </div>
+                <div className="flex-1 overflow-hidden p-4">
+                  <DocStudioStudioPanel notebookId={currentNotebookId} />
+                </div>
+              </div>
+
+            </div>
+          </>
         )}
       </div>
     </AppShell>

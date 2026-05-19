@@ -93,47 +93,79 @@ export default function DeploymentsPage() {
               <p className="text-xs mt-1">Create one to get started</p>
             </div>
           ) : (
-            <div className="bg-gray-900/80 border border-gray-800/50 rounded-xl overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-800/50 text-gray-500 text-left text-xs">
-                    <th className="px-4 py-3 font-medium">Name</th>
-                    <th className="px-4 py-3 font-medium">Project</th>
-                    <th className="px-4 py-3 font-medium">Env</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deployments.map((d) => (
-                    <tr key={d.id} className="border-b border-gray-800/30 hover:bg-gray-800/20 transition-colors">
-                      <td className="px-4 py-3 font-medium">{d.name}</td>
-                      <td className="px-4 py-3 text-gray-400">{d.project_name}</td>
-                      <td className="px-4 py-3 text-gray-400">{d.environment}</td>
-                      <td className="px-4 py-3">
-                        <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium border", STATUS_COLORS[d.status] || "bg-gray-700 text-gray-300")}>
-                          {d.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          {d.status === "stopped" && (
-                            <button onClick={() => { deploymentAction(d.id, "start"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-emerald-400" title="Start"><Play size={14} /></button>
-                          )}
-                          {d.status === "running" && (
-                            <button onClick={() => { deploymentAction(d.id, "stop"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-amber-400" title="Stop"><Square size={14} /></button>
-                          )}
-                          {d.status === "failed" && (
-                            <button onClick={() => { deploymentAction(d.id, "rollback"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-orange-400" title="Rollback"><RotateCcw size={14} /></button>
-                          )}
-                          <button onClick={() => { deleteDeployment(d.id); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-red-400" title="Delete"><Trash2 size={14} /></button>
-                        </div>
-                      </td>
+            <>
+              {/* ── Mobile card list ─────────────────────────────── */}
+              <div className="md:hidden space-y-3">
+                {deployments.map((d) => (
+                  <div key={d.id} className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-200 truncate">{d.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{d.project_name} · {d.environment}</p>
+                      </div>
+                      <span className={cn("flex-shrink-0 px-2.5 py-0.5 rounded-full text-xs font-medium border", STATUS_COLORS[d.status] || "bg-gray-700 text-gray-300 border-gray-600/30")}>
+                        {d.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 pt-1 border-t border-gray-800/40">
+                      {d.status === "stopped" && (
+                        <button onClick={() => { deploymentAction(d.id, "start"); refresh(); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-emerald-400 hover:bg-emerald-900/20 transition-colors"><Play size={13} /> Start</button>
+                      )}
+                      {d.status === "running" && (
+                        <button onClick={() => { deploymentAction(d.id, "stop"); refresh(); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-amber-400 hover:bg-amber-900/20 transition-colors"><Square size={13} /> Stop</button>
+                      )}
+                      {d.status === "failed" && (
+                        <button onClick={() => { deploymentAction(d.id, "rollback"); refresh(); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-orange-400 hover:bg-orange-900/20 transition-colors"><RotateCcw size={13} /> Rollback</button>
+                      )}
+                      <button onClick={() => { deleteDeployment(d.id); refresh(); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:bg-red-900/20 transition-colors ml-auto"><Trash2 size={13} /> Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Desktop table ────────────────────────────────── */}
+              <div className="hidden md:block bg-gray-900/80 border border-gray-800/50 rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-800/50 text-gray-500 text-left text-xs">
+                      <th className="px-4 py-3 font-medium">Name</th>
+                      <th className="px-4 py-3 font-medium">Project</th>
+                      <th className="px-4 py-3 font-medium">Env</th>
+                      <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {deployments.map((d) => (
+                      <tr key={d.id} className="border-b border-gray-800/30 hover:bg-gray-800/20 transition-colors">
+                        <td className="px-4 py-3 font-medium">{d.name}</td>
+                        <td className="px-4 py-3 text-gray-400">{d.project_name}</td>
+                        <td className="px-4 py-3 text-gray-400">{d.environment}</td>
+                        <td className="px-4 py-3">
+                          <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium border", STATUS_COLORS[d.status] || "bg-gray-700 text-gray-300")}>
+                            {d.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            {d.status === "stopped" && (
+                              <button onClick={() => { deploymentAction(d.id, "start"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-emerald-400" title="Start"><Play size={14} /></button>
+                            )}
+                            {d.status === "running" && (
+                              <button onClick={() => { deploymentAction(d.id, "stop"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-amber-400" title="Stop"><Square size={14} /></button>
+                            )}
+                            {d.status === "failed" && (
+                              <button onClick={() => { deploymentAction(d.id, "rollback"); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-orange-400" title="Rollback"><RotateCcw size={14} /></button>
+                            )}
+                            <button onClick={() => { deleteDeployment(d.id); refresh(); }} className="p-1.5 rounded-lg hover:bg-gray-700 text-red-400" title="Delete"><Trash2 size={14} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
