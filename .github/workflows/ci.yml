@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Backend ────────────────────────────────────────────
+  backend-lint:
+    name: Backend Lint & Type Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff pyright
+      - name: Ruff lint
+        run: ruff check app/ --output-format=github
+      - name: Ruff format check
+        run: ruff format --check app/
+      - name: Compile check (all modules)
+        run: python -m compileall app/ -q
+
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -v --tb=short \
+            --cov=app --cov-report=xml:coverage.xml \
+            --junitxml=test-results.xml
+        env:
+          TESTING: "1"
+          DATABASE_URL: "sqlite+aiosqlite://"
+          API_KEY: test-ci-key-do-not-use
+          AIPILOTY_JWT_SECRET: ci-jwt-secret-minimum-32-characters-long
+          AIPILOTY_OLLAMA_BASE_URL: http://localhost:11434
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-backend-coverage
+          path: backend/coverage.xml
+          retention-days: 14
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-backend-test-results
+          path: backend/test-results.xml
+          retention-days: 14
+
+  security-scan:
+    name: Security Scan (SAST + SCA)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install security tools
+        run: pip install bandit pip-audit
+      - name: Bandit SAST scan
+        # -ll = HIGH severity only, keeps noise low; report as JSON for archival
+        run: bandit -r app/ -ll -f json -o bandit-report.json || true
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: backend/bandit-report.json
+          retention-days: 14
+      - name: pip-audit dependency audit
+        run: pip-audit -r requirements.txt --format json -o pip-audit-report.json || true
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: backend/pip-audit-report.json
+          retention-days: 14
+
+  # ─── Frontend ───────────────────────────────────────────
+  frontend-check:
+    name: Frontend Lint, Type Check & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npm run lint
+      - name: npm audit (SCA)
+        run: npm audit --audit-level=moderate || true
+      - name: Unit tests (Vitest)
+        run: npm run test:coverage
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-frontend-coverage
+          path: frontend/coverage
+          retention-days: 14
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8100/api/v1
+          NEXT_PUBLIC_API_KEY: ci-placeholder
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: E2E smoke tests (Playwright)
+        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          CI: "true"
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-playwright-report
+          path: frontend/playwright-report
+          retention-days: 14
+
+  # ─── Mobile ─────────────────────────────────────────────
+  mobile-check:
+    name: Mobile Analyze & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.29.x"
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+      - name: Run tests
+        run: flutter test
+
+  # ─── Docker ─────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Verification
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: [backend-lint, backend-test, frontend-check]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build images (no push)
+        run: docker compose build --no-cache
+        working-directory: .

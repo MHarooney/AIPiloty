@@ -1,0 +1,16 @@
+#!/bin/bash
+# Resolves project root as the folder that *contains* this .app (aipiloty/).
+# Keep AIPiloty.app inside your clone: .../aipiloty/AIPiloty.app
+# For /Applications: install with scripts/link-macos-app.sh (symlink), do not copy the .app alone.
+
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+SCRIPT="$ROOT/scripts/launch-local-macos.sh"
+
+if [[ ! -f "$SCRIPT" ]]; then
+  osascript -e 'display dialog "AIPiloty could not find its project files. Keep AIPiloty.app inside the aipiloty folder next to backend/ and frontend/, or reinstall using scripts/link-macos-app.sh." buttons {"OK"} default button "OK" with title "AIPiloty" with icon stop' 2>/dev/null || true
+  exit 1
+fi
+
+exec /bin/bash "$SCRIPT" --daemon
