@@ -96,14 +96,20 @@ export default function SchedulerPage() {
               {[1, 2, 3].map((i) => <div key={i} className="h-20 rounded-2xl bg-gray-100 dark:bg-gray-800/50 skeleton-shimmer" />)}
             </div>
           ) : jobs.length === 0 ? (
-            <div className="text-center py-20">
-              <Clock size={40} className="mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-              <p className="text-gray-500 dark:text-gray-400 mb-2">No scheduled jobs yet</p>
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-600/20 border border-amber-500/20 flex items-center justify-center mb-4">
+                <CalendarClock size={28} className="text-amber-400" />
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-1">No scheduled jobs yet</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 max-w-xs">
+                Automate recurring tasks with cron expressions — run SSH commands on your VMs on a schedule.
+              </p>
               <button
                 onClick={() => setShowCreate(true)}
-                className="text-sm text-indigo-500 hover:text-indigo-600"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-500/20"
               >
-                Create your first job →
+                <Plus size={16} />
+                Create your first job
               </button>
             </div>
           ) : (

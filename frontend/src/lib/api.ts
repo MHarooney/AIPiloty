@@ -93,26 +93,52 @@ export function streamChat(
   if (model) payload.model = model;
   const body = JSON.stringify(payload);
 
-  fetch(url, { method: "POST", headers: headers(), body, signal })
-    .then(async (res) => {
-      if (!res.ok) {
-        const friendly: Record<number, string> = {
-          401: "Session expired — please log in again.",
-          403: "You don't have permission for this action.",
-          422: "The request was malformed. Please rephrase and try again.",
-          429: "Too many requests — wait a moment and retry.",
-          500: "Server error — the backend hit an unexpected problem.",
-          502: "Backend unreachable — is the server running?",
-          503: "Service temporarily unavailable. Try again shortly.",
-          504: "Request timed out — the model may be overloaded.",
-        };
-        throw new Error(friendly[res.status] || `Unexpected error (${res.status})`);
-      }
-      const reader = res.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      let buffer = "";
+  const MAX_RETRIES = 3;
+  let lastEventId: string | null = null;
 
+  async function attempt(retryCount: number): Promise<void> {
+    if (signal?.aborted) return;
+
+    const baseHeaders = headers() as Record<string, string>;
+    const reqHeaders: Record<string, string> = { ...baseHeaders };
+    if (lastEventId) reqHeaders["Last-Event-ID"] = lastEventId;
+
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers: reqHeaders, body, signal });
+    } catch (err: any) {
+      if (err.name === "AbortError") return;
+      // Network error — retry with backoff
+      if (retryCount < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, retryCount) * 1000));
+        return attempt(retryCount + 1);
+      }
+      onEvent({ type: "error", data: { message: "Connection lost after multiple retries." } });
+      return;
+    }
+
+    if (!res.ok) {
+      const friendly: Record<number, string> = {
+        401: "Session expired — please log in again.",
+        403: "You don't have permission for this action.",
+        422: "The request was malformed. Please rephrase and try again.",
+        429: "Too many requests — wait a moment and retry.",
+        500: "Server error — the backend hit an unexpected problem.",
+        502: "Backend unreachable — is the server running?",
+        503: "Service temporarily unavailable. Try again shortly.",
+        504: "Request timed out — the model may be overloaded.",
+      };
+      onEvent({ type: "error", data: { message: friendly[res.status] || `Unexpected error (${res.status})` } });
+      return;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let droppedMidStream = false;
+
+    try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -121,7 +147,9 @@ export function streamChat(
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
+          if (line.startsWith("id: ")) {
+            lastEventId = line.slice(4).trim();
+          } else if (line.startsWith("data: ")) {
             const raw = line.slice(6).trim();
             if (raw === "[DONE]") {
               onEvent({ type: "done", data: {} });
@@ -136,12 +164,23 @@ export function streamChat(
           }
         }
       }
-    })
-    .catch((err) => {
-      if (err.name !== "AbortError") {
-        onEvent({ type: "error", data: { message: err.message } });
-      }
-    });
+    } catch (err: any) {
+      if (err.name === "AbortError") return;
+      droppedMidStream = true;
+    }
+
+    // Stream ended without [DONE] — attempt reconnect if we have a last event ID
+    if (droppedMidStream && lastEventId && retryCount < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, Math.pow(2, retryCount) * 1000));
+      return attempt(retryCount + 1);
+    }
+  }
+
+  attempt(0).catch((err) => {
+    if (err.name !== "AbortError") {
+      onEvent({ type: "error", data: { message: err.message } });
+    }
+  });
 }
 
 // ── Sessions ──────────────────────────────────────

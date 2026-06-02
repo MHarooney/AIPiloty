@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,26 @@ from ...schemas.api import VMCreate, VMOut
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/vms", tags=["VMs"])
+
+# ── Per-IP rate limit for VM monitoring (5 calls / 60s) ──────────────────────
+_MONITOR_LIMIT = 5
+_MONITOR_WINDOW = 60.0
+_monitor_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_monitor_rate(ip: str) -> None:
+    """Raise 429 if the IP has exceeded the monitoring rate limit."""
+    now = time.monotonic()
+    window_start = now - _MONITOR_WINDOW
+    hits = [t for t in _monitor_hits[ip] if t > window_start]
+    hits.append(now)
+    _monitor_hits[ip] = hits
+    if len(hits) > _MONITOR_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many monitoring requests — wait before polling again",
+        )
+
 
 
 @router.get("/", response_model=list[VMOut])
@@ -141,10 +163,13 @@ async def test_vm_connection(
 @router.get("/{vm_id}/monitoring")
 async def get_vm_monitoring(
     vm_id: int,
+    request: Request,
     identity: str = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
     """Get real-time resource metrics from a VM via SSH."""
+    client_ip = request.client.host if request.client else "unknown"
+    _check_monitor_rate(client_ip)
     result = await db.execute(select(VMCredential).where(VMCredential.id == vm_id))
     vm = result.scalar_one_or_none()
     if not vm:

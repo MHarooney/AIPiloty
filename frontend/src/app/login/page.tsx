@@ -100,9 +100,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="text-center text-[11px] text-gray-600">
-          {t("login.defaultCredentials")}
-        </p>
       </div>
     </div>
   );

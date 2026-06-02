@@ -7,7 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.audit import AuditMiddleware
@@ -415,6 +416,21 @@ def create_app() -> FastAPI:
     app.include_router(testing_router, prefix="/api/v1")
     app.include_router(doc_studio_router, prefix="/api/v1")
     app.include_router(system_manager_router, prefix="/api/v1")
+
+    # Global catch-all: never expose stack traces to clients
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(req: _Request, exc: Exception) -> _JSONResponse:
+        request_id = getattr(req.state, "request_id", "unknown")
+        logger.exception(
+            "Unhandled error [%s] %s %s",
+            request_id,
+            req.method,
+            req.url.path,
+        )
+        return _JSONResponse(
+            status_code=500,
+            content={"error": "internal_server_error", "request_id": request_id},
+        )
 
     return app
 

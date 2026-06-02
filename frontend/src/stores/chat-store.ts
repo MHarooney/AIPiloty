@@ -210,6 +210,8 @@ interface ChatState {
       final_report?: Record<string, unknown> | null;
     }>
   ) => void;
+  /** Try to restore the last active session from localStorage. Returns true if a key was found. */
+  restoreLastSession: () => string | null;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -336,6 +338,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   finalizeAssistantMessage: () =>
     set((s) => {
+      if (typeof document !== "undefined") document.title = "AIPiloty";
       const msgs = [...s.messages];
       const last = msgs[msgs.length - 1];
       if (last?.role === "assistant") {
@@ -385,8 +388,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /* ── Simple setters ── */
   setPendingApproval: (tool) => set({ pendingApproval: tool }),
-  setSessionKey: (key) => set({ sessionKey: key }),
-  setIsStreaming: (v) => set({ isStreaming: v }),
+  setSessionKey: (key) => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("aipiloty_last_session", key); } catch { /* ignore */ }
+    }
+    set({ sessionKey: key });
+  },
+  setIsStreaming: (v) => {
+    if (typeof document !== "undefined") {
+      document.title = v ? "⏳ Generating… | AIPiloty" : "AIPiloty";
+    }
+    set({ isStreaming: v });
+  },
   setAvatarPhase: (phase) => set({ avatarPhase: phase }),
   setSystemState: (state) => set({ systemState: state }),
   setIntensityLevel: (level) => set({ intensityLevel: Math.max(0, Math.min(1, level)) }),
@@ -819,7 +832,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /* ── Reset / load ── */
 
-  clearChat: () =>
+  clearChat: () => {
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem("aipiloty_last_session"); } catch { /* ignore */ }
+    }
     set({
       messages: [],
       sessionKey: null,
@@ -834,7 +850,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       confidenceScore: null,
       llmWaitStartedAt: null,
       pendingToolInThisTurn: false,
-    }),
+    });
+  },
 
   loadSession: (sessionKey, apiMessages) =>
     set({
@@ -862,4 +879,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
       })),
     }),
+
+  restoreLastSession: () => {
+    if (typeof window === "undefined") return null;
+    try {
+      return localStorage.getItem("aipiloty_last_session");
+    } catch {
+      return null;
+    }
+  },
 }));

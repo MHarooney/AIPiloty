@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import Providers from "@/components/providers";
+import OnboardingWizard from "@/components/onboarding-wizard";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -25,6 +26,7 @@ export default function RootLayout({
         className={`${inter.variable} ${jetbrains.variable} font-sans antialiased bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 min-h-screen transition-colors duration-300`}
       >
         <Providers>
+          <OnboardingWizard />
           {children}
         </Providers>
         <Toaster position="bottom-right" richColors closeButton />

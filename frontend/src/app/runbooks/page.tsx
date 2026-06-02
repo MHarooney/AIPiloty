@@ -98,10 +98,21 @@ export default function RunbooksPage() {
               {[1, 2].map((i) => <div key={i} className="h-28 rounded-2xl bg-gray-100 dark:bg-gray-800/50 skeleton-shimmer" />)}
             </div>
           ) : runbooks.length === 0 ? (
-            <div className="text-center py-20">
-              <FileText size={40} className="mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-              <p className="text-gray-500 dark:text-gray-400 mb-2">No runbooks yet</p>
-              <p className="text-xs text-gray-400">Create reusable automation scripts for common tasks</p>
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-rose-500/20 to-pink-600/20 border border-rose-500/20 flex items-center justify-center mb-4">
+                <FileText size={28} className="text-rose-400" />
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-1">No runbooks yet</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-5 max-w-xs">
+                Create reusable automation scripts to run SSH commands across your VMs with one click.
+              </p>
+              <button
+                onClick={() => setShowCreate(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-500/20"
+              >
+                <Plus size={16} />
+                Create your first runbook
+              </button>
             </div>
           ) : (
             <div className="space-y-3">

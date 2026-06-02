@@ -93,8 +93,10 @@ function MessageBubble({
       systemState === "planning" ||
       avatarPhase === "thinking");
 
+  const msgTime = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
-    <div className={cn("flex gap-3 animate-fade-slide-up", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("group flex gap-3 animate-fade-slide-up", isUser ? "justify-end" : "justify-start")}>
       {/* Avatar + Speech Bubble */}
       {!isUser && (
         <div className="flex flex-col items-center gap-1.5 shrink-0">
@@ -221,6 +223,16 @@ function MessageBubble({
               onDismiss={() => dismissMessageFinalReport(msg.id)}
             />
           </motion.div>
+        )}
+
+        {/* Timestamp — visible on hover */}
+        {!msg.isStreaming && (
+          <span className={cn(
+            "text-[10px] text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity duration-150 select-none mt-0.5",
+            isUser ? "text-right" : "text-left"
+          )}>
+            {msgTime}
+          </span>
         )}
 
         {/* Retry button on errored assistant messages */}
