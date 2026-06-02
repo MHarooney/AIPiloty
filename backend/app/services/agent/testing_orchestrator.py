@@ -63,8 +63,8 @@ BEFORE clicking any button or filling any form that you have not already seen in
 WRONG: browser_click selector="a:has-text('Create Course')" (guessing)
 RIGHT: call browser_page_map first → find actual button text "Add Course" → browser_click text="Add Course"
 
-WRONG: browser_fill_form fields=[{"selector": "[aria-label='Course Title']", "value": "..."}] (guessing)
-RIGHT: call browser_page_map first → find actual label "Title" → browser_fill_form fields=[{"selector": "[aria-label='Title']", "value": "..."}]
+WRONG: browser_fill_form fields=[{{"selector": "[aria-label='Course Title']", "value": "..."}}] (guessing)
+RIGHT: call browser_page_map first → find actual label "Title" → browser_fill_form fields=[{{"selector": "[aria-label='Title']", "value": "..."}}]
 
 For Vuetify/Vue apps: inputs often have no aria-label. Use the label text as the `text=` value in browser_fill_form.
 

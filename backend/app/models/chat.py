@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from ..core.database import Base
@@ -17,6 +17,9 @@ def _utcnow() -> datetime:
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("idx_sess_updated_at", "updated_at"),
+    )
 
     id = Column(Integer, primary_key=True)
     session_key = Column(String(64), unique=True, nullable=False, default=lambda: uuid.uuid4().hex)
@@ -29,6 +32,9 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("idx_msg_session_id", "session_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)

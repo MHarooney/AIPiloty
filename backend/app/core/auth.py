@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from secrets import compare_digest
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Security, status
@@ -34,8 +35,8 @@ async def require_auth(
     """Validate either API-key or JWT bearer token. Returns the identity string."""
     settings = get_settings()
 
-    # 1. API Key
-    if api_key and api_key == settings.api_key:
+    # 1. API Key — use timing-safe comparison to prevent timing attacks
+    if api_key and compare_digest(api_key, settings.api_key):
         return "api_key_user"
 
     # 2. JWT Bearer

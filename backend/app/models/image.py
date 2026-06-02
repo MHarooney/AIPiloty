@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String, Text, Float
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text, Float
 
 from ..core.database import Base
 
@@ -16,6 +16,9 @@ def _utcnow() -> datetime:
 
 class GeneratedImage(Base):
     __tablename__ = "generated_images"
+    __table_args__ = (
+        Index("idx_img_created_at", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True)
     image_id = Column(String(64), unique=True, nullable=False, default=lambda: uuid.uuid4().hex)

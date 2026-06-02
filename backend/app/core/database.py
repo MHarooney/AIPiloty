@@ -75,6 +75,7 @@ async def get_db() -> AsyncSession:  # type: ignore[misc]
 async def init_db() -> None:
     # Import all models so Base.metadata knows about them
     from ..models import chat, vm, image, audit_log, testing, doc_studio  # noqa: F401
+    from ..models import deployment, webhook  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -92,5 +93,29 @@ async def init_db() -> None:
             if "attachments_json" not in cols:
                 sync_conn.execute(text("ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT"))
 
+        def _ensure_deployment_columns(sync_conn):
+            from sqlalchemy import text
+
+            r = sync_conn.execute(text("PRAGMA table_info(deployments)"))
+            existing = {row[1] for row in r.fetchall()}
+            new_cols = [
+                ("docker_image",          "VARCHAR(512)"),
+                ("dockerhub_image",       "VARCHAR(512)"),
+                ("dockerhub_tag",         "VARCHAR(256)"),
+                ("container_name",        "VARCHAR(256)"),
+                ("port_mapping",          "VARCHAR(64)"),
+                ("build_platform",        "VARCHAR(64)"),
+                ("dockerfile",            "VARCHAR(256)"),
+                ("docker_network",        "VARCHAR(256)"),
+                ("docker_run_extra_args", "VARCHAR(512)"),
+                ("trigger_type",          "VARCHAR(20)"),
+                ("cron_expression",       "VARCHAR(64)"),
+                ("webhook_secret",        "VARCHAR(64)"),
+            ]
+            for col_name, col_type in new_cols:
+                if col_name not in existing:
+                    sync_conn.execute(text(f"ALTER TABLE deployments ADD COLUMN {col_name} {col_type}"))
+
         async with engine.begin() as conn:
             await conn.run_sync(_ensure_chat_columns)
+            await conn.run_sync(_ensure_deployment_columns)

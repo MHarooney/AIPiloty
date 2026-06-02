@@ -17,16 +17,45 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.auth import require_auth
 from ...core.database import get_db
 from ...core.config import get_settings
+from ...models.deployment import Deployment, DeploymentRun
+from ...models.vm import VMCredential
+from ...models.chat import ChatSession, ChatMessage
+from ...models.image import GeneratedImage
+from ...models.testing import TestingTarget, TestRun, TestResult
+from ...models.webhook import Webhook
+from ...models.doc_studio import Notebook, NotebookSource, NotebookArtifact
+from ...models.audit_log import AuditLog
 
 router = APIRouter(prefix="/database", tags=["Database"])
 
 _TABLE_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _MAX_ROWS = 100
 
+# Allowlist of known application tables — prevents access to any future tables
+# added by SQLAlchemy migrations that aren't meant for browser exposure.
+_KNOWN_TABLES: frozenset[str] = frozenset({
+    Deployment.__tablename__,
+    DeploymentRun.__tablename__,
+    VMCredential.__tablename__,
+    ChatSession.__tablename__,
+    ChatMessage.__tablename__,
+    GeneratedImage.__tablename__,
+    TestingTarget.__tablename__,
+    TestRun.__tablename__,
+    TestResult.__tablename__,
+    Webhook.__tablename__,
+    Notebook.__tablename__,
+    NotebookSource.__tablename__,
+    NotebookArtifact.__tablename__,
+    AuditLog.__tablename__,
+})
+
 
 def _validate_table_name(name: str) -> str:
     if not _TABLE_NAME_RE.match(name):
         raise HTTPException(400, "Invalid table name")
+    if name not in _KNOWN_TABLES:
+        raise HTTPException(404, "Table not found")
     return name
 
 

@@ -77,10 +77,10 @@ def _normalize_tool_results_for_api(stored: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _get_orchestrator() -> AgentOrchestrator:
-    """Get the orchestrator from app state (set during startup)."""
+def _get_orchestrator():
+    """Get the orchestrator from app state. Returns None if disabled."""
     from ...main import app_state
-    return app_state["orchestrator"]
+    return app_state.get("orchestrator")
 
 
 @router.post("/stream")
@@ -91,6 +91,17 @@ async def chat_stream(
 ):
     """SSE streaming chat with agent tool calling."""
     orchestrator = _get_orchestrator()
+
+    if orchestrator is None:
+        _msg = json.dumps({"type": "error", "data": {"message": "LLM service is disabled. Enable Ollama in Settings \u2192 Services."}})
+        async def _disabled():
+            yield f"data: {_msg}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(
+            _disabled(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Get or create session
     session_key = req.session_key or uuid.uuid4().hex

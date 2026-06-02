@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from ..core.database import Base
@@ -19,6 +19,10 @@ def _utcnow() -> datetime:
 
 class VMCredential(Base):
     __tablename__ = "vm_credentials"
+    __table_args__ = (
+        Index("idx_vm_is_active", "is_active"),
+        Index("idx_vm_created_at", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)

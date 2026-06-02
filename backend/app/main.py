@@ -253,6 +253,11 @@ async def lifespan(app: FastAPI):
     app_state["retriever"] = retriever
     app_state["ingest_service"] = ingest_service
 
+    # Docker deployment pipeline executor
+    from .services.deployment.pipeline_executor import PipelineExecutor
+    pipeline_executor = PipelineExecutor(ssh_executor)
+    app_state["pipeline_executor"] = pipeline_executor
+
     # Doc Studio services
     notebook_ingest = NotebookIngestService(
         store=qdrant_store,
@@ -381,6 +386,7 @@ def create_app() -> FastAPI:
     from .api.v1.mcp_config import router as mcp_router
     from .api.v1.testing import router as testing_router
     from .api.v1.doc_studio import router as doc_studio_router
+    from .api.v1.system_manager import router as system_manager_router
 
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
@@ -408,6 +414,7 @@ def create_app() -> FastAPI:
     app.include_router(mcp_router, prefix="/api/v1")
     app.include_router(testing_router, prefix="/api/v1")
     app.include_router(doc_studio_router, prefix="/api/v1")
+    app.include_router(system_manager_router, prefix="/api/v1")
 
     return app
 

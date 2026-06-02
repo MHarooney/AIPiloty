@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import logging
 
@@ -64,10 +65,8 @@ async def health_check():
     """
     settings = get_settings()
 
-    ollama, db, qdrant = (
-        await _probe_ollama(),
-        await _probe_db(),
-        await _probe_qdrant(),
+    ollama, db, qdrant = await asyncio.gather(
+        _probe_ollama(), _probe_db(), _probe_qdrant()
     )
 
     components = {

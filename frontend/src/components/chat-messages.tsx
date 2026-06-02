@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw, FileText, Image as ImageIcon } from "lucide-react";
+import { RefreshCw, FileText, Image as ImageIcon, ChevronDown } from "lucide-react";
 import { useChatStore, type ChatMessage } from "@/stores/chat-store";
 import { cn } from "@/lib/utils";
 import AIAvatar from "./ai-avatar";
@@ -247,10 +247,23 @@ export default function ChatMessages() {
   const avatarPhase = useChatStore((s) => s.avatarPhase);
   const systemState = useChatStore((s) => s.systemState);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isStreaming]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      setShowScrollButton(distFromBottom > 150);
+    };
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, []);
 
   if (messages.length === 0) {
     return (
@@ -305,7 +318,8 @@ export default function ChatMessages() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-10 py-6 pt-14 md:pt-6" role="log" aria-live="polite" aria-label="Chat messages">
+    <div className="relative flex-1 flex flex-col min-h-0">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-10 py-6 pt-14 md:pt-6" role="log" aria-live="polite" aria-label="Chat messages">
       <div className="space-y-5 w-full">
         <AnimatePresence initial={false}>
           {messages.map((msg, i) => (
@@ -351,6 +365,18 @@ export default function ChatMessages() {
 
         <div ref={bottomRef} />
       </div>
+    </div>
+
+      {/* Scroll-to-bottom button */}
+      {showScrollButton && (
+        <button
+          onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+          aria-label="Scroll to bottom"
+          className="absolute bottom-4 right-6 z-10 p-2 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white shadow-lg transition-all duration-200 animate-fade-in"
+        >
+          <ChevronDown size={16} />
+        </button>
+      )}
     </div>
   );
 }

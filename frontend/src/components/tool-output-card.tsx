@@ -104,6 +104,8 @@ function FileListView({
 
 /* ─── Glass Key-Value Rows ───────────────────────────────── */
 
+const MAX_DEPTH = 5;
+
 function GlassKeyValueRow({
   k,
   v,
@@ -118,6 +120,18 @@ function GlassKeyValueRow({
   const isObject = typeof v === "object" && v !== null && !Array.isArray(v);
   const isArray = Array.isArray(v);
   const [open, setOpen] = useState(depth < 1);
+
+  // Depth guard — prevents stack overflow on deeply nested JSON
+  if ((isObject || isArray) && depth >= MAX_DEPTH) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs py-0.5">
+        <span className="text-indigo-400 font-medium">{k}</span>
+        <span className="text-gray-600 font-mono text-[10px]">
+          {isArray ? `[${v.length} items — nested]` : `{…nested}`}
+        </span>
+      </div>
+    );
+  }
 
   if (isObject || isArray) {
     const entries: [string, any][] = isArray

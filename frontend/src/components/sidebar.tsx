@@ -7,7 +7,7 @@ import {
   MessageSquare, Server, Rocket, LayoutDashboard,
   Plus, Trash2, ChevronLeft, Sparkles,
   BookOpen, Database, Code, Settings, Image, LogOut, Activity,
-  Clock, Globe, FileText, TestTube2, BookMarked,
+  Clock, Globe, FileText, TestTube2, BookMarked, HardDrive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -17,22 +17,45 @@ import { useTestingStore } from "@/stores/testing-store";
 import { useI18n } from "@/i18n";
 import AIAvatar from "./ai-avatar";
 
-const NAV = [
-  { href: "/", icon: MessageSquare, tKey: "nav.chat" },
-  { href: "/testing", icon: TestTube2, tKey: "nav.testing" },
-  { href: "/images", icon: Image, tKey: "nav.images" },
-  { href: "/deployments", icon: Rocket, tKey: "nav.deployments" },
-  { href: "/vms", icon: Server, tKey: "nav.vms" },
-  { href: "/dashboard", icon: LayoutDashboard, tKey: "nav.dashboard" },
-  { href: "/knowledge", icon: BookOpen, tKey: "nav.knowledge" },
-  { href: "/database", icon: Database, tKey: "nav.database" },
-  { href: "/code-editor", icon: Code, tKey: "nav.codeEditor" },
-  { href: "/observability", icon: Activity, tKey: "nav.observability" },
-  { href: "/scheduler", icon: Clock, tKey: "nav.scheduler" },
-  { href: "/webhooks", icon: Globe, tKey: "nav.webhooks" },
-  { href: "/runbooks", icon: FileText, tKey: "nav.runbooks" },
-  { href: "/doc-studio", icon: BookMarked, tKey: "nav.docStudio" },
+const NAV_GROUPS = [
+  {
+    label: "AI",
+    items: [
+      { href: "/", icon: MessageSquare, tKey: "nav.chat" },
+      { href: "/testing", icon: TestTube2, tKey: "nav.testing" },
+      { href: "/images", icon: Image, tKey: "nav.images" },
+    ],
+  },
+  {
+    label: "Infrastructure",
+    items: [
+      { href: "/deployments", icon: Rocket, tKey: "nav.deployments" },
+      { href: "/vms", icon: Server, tKey: "nav.vms" },
+    ],
+  },
+  {
+    label: "Dev Tools",
+    items: [
+      { href: "/code-editor", icon: Code, tKey: "nav.codeEditor" },
+      { href: "/database", icon: Database, tKey: "nav.database" },
+      { href: "/knowledge", icon: BookOpen, tKey: "nav.knowledge" },
+      { href: "/doc-studio", icon: BookMarked, tKey: "nav.docStudio" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { href: "/dashboard", icon: LayoutDashboard, tKey: "nav.dashboard" },
+      { href: "/observability", icon: Activity, tKey: "nav.observability" },
+      { href: "/scheduler", icon: Clock, tKey: "nav.scheduler" },
+      { href: "/webhooks", icon: Globe, tKey: "nav.webhooks" },
+      { href: "/runbooks", icon: FileText, tKey: "nav.runbooks" },
+      { href: "/system-manager", icon: HardDrive, tKey: "nav.systemManager" },
+    ],
+  },
 ];
+
+
 
 interface SidebarProps {
   onNavigate?: () => void;
@@ -136,30 +159,39 @@ export default function Sidebar({ onNavigate, onOpenSettings }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto scrollbar-thin">
-        {NAV.map(({ href, icon: Icon, tKey }) => {
-          const active = pathname === href || (href !== "/" && pathname.startsWith(href));
-          return (
-            <Link
-              key={href}
-              href={href}
-              onClick={onNavigate}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "group relative flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200",
-                "focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none",
-                active
-                  ? "bg-indigo-50 dark:bg-indigo-600/15 text-indigo-600 dark:text-indigo-300 shadow-sm dark:shadow-none"
-                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/60 hover:text-gray-900 dark:hover:text-gray-200"
-              )}
-            >
-              {active && (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-indigo-500" />
-              )}
-              <Icon size={18} className={cn(active && "text-indigo-500 dark:text-indigo-400")} />
-              {!collapsed && <span>{t(tKey)}</span>}
-            </Link>
-          );
-        })}
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.label} className={cn(gi > 0 && "pt-2")}>
+            {!collapsed && (
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600">
+                {group.label}
+              </p>
+            )}
+            {group.items.map(({ href, icon: Icon, tKey }) => {
+              const active = pathname === href || (href !== "/" && pathname.startsWith(href));
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={onNavigate}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "group relative flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200",
+                    "focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none",
+                    active
+                      ? "bg-indigo-50 dark:bg-indigo-600/15 text-indigo-600 dark:text-indigo-300 shadow-sm dark:shadow-none"
+                      : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/60 hover:text-gray-900 dark:hover:text-gray-200"
+                  )}
+                >
+                  {active && (
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-indigo-500" />
+                  )}
+                  <Icon size={18} className={cn(active && "text-indigo-500 dark:text-indigo-400")} />
+                  {!collapsed && <span>{t(tKey)}</span>}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
 
         {/* Divider */}
         <div className="!my-2 border-t border-gray-200/60 dark:border-gray-800/50" />

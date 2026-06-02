@@ -211,6 +211,20 @@ export default function ChatInput() {
     setIsListening(true);
   }, [isListening]);
 
+  // Cleanup: stop recognition when component unmounts
+  useEffect(() => {
+    return () => {
+      const rec = recognitionRef.current;
+      if (rec) {
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        try { rec.stop(); } catch { /* already stopped */ }
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
+
   // @-mention trigger in textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const el = e.target;

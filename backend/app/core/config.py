@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # dramatically inflate per-iteration latency.  4096 is generous for a
     # single agent thought/tool-call turn while keeping responses fast.
     ollama_num_predict: int = 4096
+    # Runtime toggle — set False to disable Ollama without a full restart.
+    # Can also be flipped at runtime via PATCH /api/v1/config/services.
+    ollama_enabled: bool = True
 
     # Encryption
     encryption_key: Optional[str] = None
@@ -68,6 +71,10 @@ class Settings(BaseSettings):
     kb_allowed_roots: str = ""
     kb_chunk_size: int = 512
     kb_chunk_overlap: int = 64
+
+    # Docker Hub credentials (used by pipeline executor for docker push)
+    docker_hub_username: Optional[str] = None
+    docker_hub_password: Optional[str] = None
 
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:3001"

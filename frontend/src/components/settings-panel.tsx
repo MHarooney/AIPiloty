@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useChatStore, type ToolPermission } from "@/stores/chat-store";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, X, Shield, Zap, Terminal, Server, FileCode, Globe, Palette } from "lucide-react";
+import { Settings, X, Shield, Zap, Terminal, Server, FileCode, Globe, Palette, Power, BrainCircuit, Database, Image } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n, AVAILABLE_LOCALES } from "@/i18n";
 import ThemeToggle from "./theme-toggle";
+import { getServices, toggleService, type ServicesResponse } from "@/lib/api";
 
 const TOOL_CATEGORIES = [
   { id: "ssh_command", label: "SSH Command", icon: Terminal },
@@ -39,6 +40,26 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { locale, setLocale } = useI18n();
   const [whitelistInput, setWhitelistInput] = useState("");
   const [blacklistInput, setBlacklistInput] = useState("");
+  const [activeTab, setActiveTab] = useState<"control" | "services">("control");
+  const [services, setServices] = useState<ServicesResponse | null>(null);
+  const [togglingService, setTogglingService] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && activeTab === "services") {
+      getServices().then(setServices).catch(() => {});
+    }
+  }, [open, activeTab]);
+
+  const handleToggleService = async (service: string, enabled: boolean) => {
+    setTogglingService(service);
+    try {
+      await toggleService(service, enabled);
+      const updated = await getServices();
+      setServices(updated);
+    } catch { /* silent */ } finally {
+      setTogglingService(null);
+    }
+  };
 
   const addToWhitelist = () => {
     const trimmed = whitelistInput.trim();
@@ -109,7 +130,73 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </button>
             </div>
 
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-800/40 px-4">
+              {(["control", "services"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={cn(
+                    "py-2 px-3 text-[11px] font-medium capitalize transition-colors border-b-2 -mb-px",
+                    activeTab === tab
+                      ? "border-indigo-500 text-indigo-300"
+                      : "border-transparent text-gray-500 hover:text-gray-300"
+                  )}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
             <div className="p-4 space-y-6">
+              {activeTab === "services" && (
+                <section className="space-y-3">
+                  <h3 className="text-[10px] uppercase tracking-widest text-gray-600 font-medium flex items-center gap-1.5">
+                    <Power size={10} /> Runtime Services
+                  </h3>
+                  {!services && (
+                    <p className="text-[11px] text-gray-500 italic">Loading…</p>
+                  )}
+                  {services && [
+                    { key: "ollama", label: "Ollama (LLM)", icon: BrainCircuit, meta: services.ollama.model },
+                    { key: "qdrant", label: "Qdrant (RAG)", icon: Database, meta: services.qdrant.url },
+                    { key: "image_gen", label: "Image Generation", icon: Image, meta: services.image_gen.provider },
+                  ].map(({ key, label, icon: Icon, meta }) => {
+                    const svc = services[key as keyof ServicesResponse];
+                    const isToggling = togglingService === key;
+                    return (
+                      <div key={key} className="flex items-center justify-between py-2.5 px-3 rounded-lg bg-gray-900/50 border border-gray-800/40">
+                        <div className="flex items-center gap-2">
+                          <Icon size={14} className={svc.active ? "text-indigo-400" : "text-gray-600"} />
+                          <div>
+                            <p className="text-xs text-gray-300 font-medium">{label}</p>
+                            {meta && <p className="text-[10px] text-gray-600 truncate max-w-[120px]">{meta}</p>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={cn("w-1.5 h-1.5 rounded-full", svc.reachable ? "bg-emerald-400" : "bg-red-500")} />
+                          <button
+                            disabled={isToggling}
+                            onClick={() => handleToggleService(key, !svc.enabled)}
+                            className={cn(
+                              "relative w-9 h-5 rounded-full transition-colors focus:outline-none",
+                              svc.enabled ? "bg-indigo-600" : "bg-gray-700",
+                              isToggling && "opacity-50 cursor-not-allowed"
+                            )}
+                          >
+                            <span className={cn(
+                              "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform",
+                              svc.enabled ? "translate-x-4" : "translate-x-0"
+                            )} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </section>
+              )}
+
+              {activeTab === "control" && <>
               {/* ── Auto-approve toggles ── */}
               <section>
                 <h3 className="text-[10px] uppercase tracking-widest text-gray-600 font-medium mb-3 flex items-center gap-1.5">
@@ -271,6 +358,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </h3>
                 <ThemeToggle />
               </section>
+              </>}
             </div>
           </motion.div>
         </>

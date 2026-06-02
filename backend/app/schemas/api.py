@@ -85,6 +85,20 @@ class DeploymentCreate(BaseModel):
     deploy_path: Optional[str] = None
     repository_url: Optional[str] = None
     branch: str = "main"
+    # Docker pipeline fields
+    docker_image: Optional[str] = None
+    dockerhub_image: Optional[str] = None
+    dockerhub_tag: str = "latest"
+    container_name: Optional[str] = None
+    port_mapping: Optional[str] = None
+    build_platform: str = "linux/amd64"
+    dockerfile: str = "Dockerfile"
+    docker_network: Optional[str] = None
+    docker_run_extra_args: Optional[str] = None
+    # Trigger config
+    trigger_type: str = "manual"
+    cron_expression: Optional[str] = None
+    webhook_secret: Optional[str] = None
 
 
 class DeploymentOut(BaseModel):
@@ -101,6 +115,31 @@ class DeploymentOut(BaseModel):
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # Docker pipeline fields
+    docker_image: Optional[str] = None
+    dockerhub_image: Optional[str] = None
+    dockerhub_tag: str = "latest"
+    container_name: Optional[str] = None
+    port_mapping: Optional[str] = None
+    build_platform: str = "linux/amd64"
+    dockerfile: str = "Dockerfile"
+    docker_network: Optional[str] = None
+    docker_run_extra_args: Optional[str] = None
+    trigger_type: str = "manual"
+    cron_expression: Optional[str] = None
+    webhook_secret: Optional[str] = None
+
+
+class DeploymentRunOut(BaseModel):
+    id: int
+    deployment_id: int
+    trigger: str
+    triggered_by: Optional[str] = None
+    status: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    log: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 class DeploymentAction(BaseModel):

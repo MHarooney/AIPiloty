@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -164,16 +165,20 @@ async def get_vm_monitoring(
         "load": "cat /proc/loadavg | awk '{print $1, $2, $3}'",
     }
 
-    for key, cmd in commands.items():
+    async def _run(cmd: str) -> str | None:
         try:
-            cmd_result = await ssh.execute_command(
+            result = await ssh.execute_command(
                 host=vm.host_ip, username=vm.ssh_username, command=cmd,
                 password=vm.decrypted_password, private_key=vm.decrypted_private_key,
                 port=vm.ssh_port or 22, stored_fingerprint=vm.ssh_host_key_fingerprint,
             )
-            metrics[key] = cmd_result.get("stdout", "").strip()
+            return result.get("stdout", "").strip()
         except Exception:
-            metrics[key] = None
+            return None
+
+    keys = list(commands.keys())
+    results = await asyncio.gather(*[_run(commands[k]) for k in keys])
+    metrics = dict(zip(keys, results))
 
     return {"vm_id": vm_id, "vm_name": vm.name, "metrics": metrics}
 

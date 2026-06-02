@@ -21,7 +21,8 @@
     "scheduler": "Scheduler",
     "webhooks": "Webhooks",
     "runbooks": "Runbooks",
-    "docStudio": "Doc Studio"
+    "docStudio": "Doc Studio",
+    "systemManager": "System Manager"
   },
   "chat": {
     "placeholder": "Message AIPiloty...",

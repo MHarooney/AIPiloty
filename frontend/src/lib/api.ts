@@ -194,8 +194,16 @@ export async function getDeployments() {
   const res = await fetch(`${API_BASE}/deployments/`, { headers: headers() });
   return handleRes<any[]>(res);
 }
+export async function getDeployment(id: number) {
+  const res = await fetch(`${API_BASE}/deployments/${id}`, { headers: headers() });
+  return handleRes<any>(res);
+}
 export async function createDeployment(data: Record<string, any>) {
   const res = await fetch(`${API_BASE}/deployments/`, { method: "POST", headers: headers(), body: JSON.stringify(data) });
+  return handleRes<any>(res);
+}
+export async function updateDeployment(id: number, data: Record<string, any>) {
+  const res = await fetch(`${API_BASE}/deployments/${id}`, { method: "PUT", headers: headers(), body: JSON.stringify(data) });
   return handleRes<any>(res);
 }
 export async function deploymentAction(id: number, action: string) {
@@ -205,6 +213,52 @@ export async function deploymentAction(id: number, action: string) {
 export async function deleteDeployment(id: number) {
   const res = await fetch(`${API_BASE}/deployments/${id}`, { method: "DELETE", headers: headers() });
   return handleRes<any>(res);
+}
+export async function getDeploymentRuns(id: number, limit = 20) {
+  const res = await fetch(`${API_BASE}/deployments/${id}/runs?limit=${limit}`, { headers: headers() });
+  return handleRes<any[]>(res);
+}
+export async function getDeploymentRun(id: number, runId: number) {
+  const res = await fetch(`${API_BASE}/deployments/${id}/runs/${runId}`, { headers: headers() });
+  return handleRes<any>(res);
+}
+export async function seedDeployments() {
+  const res = await fetch(`${API_BASE}/deployments/seed/defaults`, { method: "POST", headers: headers() });
+  return handleRes<{ created: string[]; skipped: string[] }>(res);
+}
+
+/** SSE pipeline run — streams progress events until [DONE] */
+export function streamDeploymentRun(
+  id: number,
+  onEvent: (event: SSEEvent) => void,
+  signal?: AbortSignal
+) {
+  const url = `${API_BASE}/deployments/${id}/run`;
+  fetch(url, { method: "POST", headers: headers(), signal })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") { onEvent({ type: "done", data: {} }); return; }
+            try { onEvent(JSON.parse(raw)); } catch { /* skip malformed */ }
+          }
+        }
+      }
+    })
+    .catch((err) => {
+      if (err.name !== "AbortError") onEvent({ type: "error", data: { message: err.message } });
+    });
 }
 
 // ── Health ──────────────────────────────────────
@@ -302,6 +356,79 @@ export async function updateConfig(data: { ollama_model?: string; ollama_tempera
 export async function listModels() {
   const res = await fetch(`${API_BASE}/config/models`, { headers: headers() });
   return handleRes<{ models: { name: string; size: number; parameter_size: string; family: string }[]; current: string }>(res);
+}
+
+// ── Service management ──────────────────────────────────────────────────────
+export interface ServiceStatus {
+  enabled: boolean;
+  reachable?: boolean;
+  active: boolean;
+  model?: string;
+  base_url?: string;
+  url?: string;
+  provider?: string;
+}
+export interface ServicesResponse {
+  ollama: ServiceStatus;
+  qdrant: ServiceStatus;
+  image_gen: ServiceStatus;
+}
+
+export async function getServices(): Promise<ServicesResponse> {
+  const res = await fetch(`${API_BASE}/config/services`, { headers: headers() });
+  return handleRes<ServicesResponse>(res);
+}
+
+export async function toggleService(service: string, enabled: boolean): Promise<{ success: boolean; service: string; enabled: boolean }> {
+  const res = await fetch(`${API_BASE}/config/services`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ service, enabled }),
+  });
+  return handleRes(res);
+}
+
+// ── System Manager ──────────────────────────────────────────────────────────
+export async function getDisk() {
+  const res = await fetch(`${API_BASE}/system-manager/disk`, { headers: headers() });
+  return handleRes<{ total: number; used: number; free: number; percent: number; home_used: number; total_human: string; used_human: string; free_human: string; home_used_human: string }>(res);
+}
+
+export async function getCaches() {
+  const res = await fetch(`${API_BASE}/system-manager/caches`, { headers: headers() });
+  return handleRes<{ caches: { path: string; label: string; size_bytes: number; size_human: string; deletable: boolean }[] }>(res);
+}
+
+export async function scanLargeFiles(path: string, minMb = 50, limit = 50) {
+  const res = await fetch(`${API_BASE}/system-manager/scan/large-files`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ path, min_mb: minMb, limit }),
+  });
+  return handleRes<{ files: { path: string; size_bytes: number; size_human: string; modified: number }[]; count: number; scanned_path: string }>(res);
+}
+
+export async function scanDuplicates(path: string, minKb = 100) {
+  const res = await fetch(`${API_BASE}/system-manager/scan/duplicates`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ path, min_kb: minKb }),
+  });
+  return handleRes<{ groups: { hash: string; count: number; size_each_human: string; wasted_bytes: number; wasted_human: string; files: { path: string; size_bytes: number; size_human: string; modified: number }[] }[]; group_count: number; total_wasted_bytes: number; total_wasted_human: string; scanned_path: string }>(res);
+}
+
+export async function cleanupPaths(paths: string[]) {
+  const res = await fetch(`${API_BASE}/system-manager/cleanup`, {
+    method: "DELETE",
+    headers: headers(),
+    body: JSON.stringify({ paths }),
+  });
+  return handleRes<{ deleted: number; freed_bytes: number; freed_human: string; errors: string[] }>(res);
+}
+
+export async function getProcesses() {
+  const res = await fetch(`${API_BASE}/system-manager/processes`, { headers: headers() });
+  return handleRes<{ processes: { pid: number; name: string; cpu_percent: number; memory_percent: number; status: string; username: string }[] }>(res);
 }
 
 // ── Logs ──────────────────────────────────────────
@@ -412,24 +539,6 @@ export async function deleteImage(imageId: string) {
 }
 export function imageUrl(relativePath: string) {
   return `${API_BASE}/files/${relativePath}`;
-}
-
-// ── Deployment Detail + History ──────────────────────
-export async function getDeployment(id: number) {
-  const res = await fetch(`${API_BASE}/deployments/${id}`, { headers: headers() });
-  return handleRes<any>(res);
-}
-export async function getDeploymentHistory() {
-  const res = await fetch(`${API_BASE}/deployments/history`, { headers: headers() });
-  return handleRes<any[]>(res);
-}
-export async function getDeploymentLogs(id: number) {
-  const res = await fetch(`${API_BASE}/deployments/${id}/logs`, { headers: headers() });
-  return handleRes<{ logs: string[] }>(res);
-}
-export async function getDeploymentHealthCheck(id: number) {
-  const res = await fetch(`${API_BASE}/deployments/${id}/health`, { headers: headers() });
-  return handleRes<any>(res);
 }
 
 // ── VM Monitoring + Users ──────────────────────────

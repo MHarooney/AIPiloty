@@ -21,7 +21,8 @@
     "scheduler": "الجدولة",
     "webhooks": "خطافات الويب",
     "runbooks": "دفاتر التشغيل",
-    "docStudio": "استوديو المستندات"
+    "docStudio": "استوديو المستندات",
+    "systemManager": "مدير النظام"
   },
   "chat": {
     "placeholder": "أرسل رسالة إلى AIPiloty...",

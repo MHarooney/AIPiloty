@@ -5,11 +5,25 @@
 :root {
   --background: #ffffff;
   --foreground: #111827;
+  /* Semantic surface tokens */
+  --surface: #f9fafb;
+  --surface-raised: #ffffff;
+  --border: #e5e7eb;
+  --muted: #6b7280;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
 }
 
 .dark {
   --background: #030712;
   --foreground: #f3f4f6;
+  /* Semantic surface tokens — dark mode */
+  --surface: #111827;
+  --surface-raised: #1f2937;
+  --border: rgba(55, 65, 81, 0.5);
+  --muted: #9ca3af;
+  --accent: #818cf8;
+  --accent-hover: #6366f1;
 }
 
 body {
