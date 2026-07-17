@@ -381,6 +381,67 @@ export async function searchWorkspace(query: string, path = ".", maxResults = 10
   return handleRes<{ results: Array<{ file: string; line: number; content: string }>; total: number; truncated: boolean }>(res);
 }
 
+// ── IDE file-operations (Phase IDE) ────────────────────────────────────────
+export async function createWorkspaceFile(path: string, content = "", projectId?: string) {
+  const res = await fetch(`${API_BASE}/workspace/create-file`, {
+    method: "POST", headers: headers(),
+    body: JSON.stringify({ path, content, project_id: projectId }),
+  });
+  return handleRes<{ created: boolean; path: string; language: string }>(res);
+}
+export async function createWorkspaceDir(path: string, projectId?: string) {
+  const res = await fetch(`${API_BASE}/workspace/create-dir`, {
+    method: "POST", headers: headers(),
+    body: JSON.stringify({ path, project_id: projectId }),
+  });
+  return handleRes<{ created: boolean; path: string }>(res);
+}
+export async function renameWorkspacePath(oldPath: string, newPath: string, projectId?: string) {
+  const res = await fetch(`${API_BASE}/workspace/rename`, {
+    method: "POST", headers: headers(),
+    body: JSON.stringify({ old_path: oldPath, new_path: newPath, project_id: projectId }),
+  });
+  return handleRes<{ renamed: boolean; old_path: string; new_path: string }>(res);
+}
+export async function deleteWorkspacePath(path: string, projectId?: string) {
+  const res = await fetch(`${API_BASE}/workspace/delete`, {
+    method: "DELETE", headers: headers(),
+    body: JSON.stringify({ path, project_id: projectId }),
+  });
+  return handleRes<{ deleted: boolean; path: string; was_directory: boolean }>(res);
+}
+
+// ── MCP marketplace (Phase IDE) ──────────────────────────────────────────────
+export interface MCPMarketplaceItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  requires_env: string[];
+  popular: boolean;
+  official: boolean;
+  installed: boolean;
+}
+export async function getMCPMarketplace(category?: string): Promise<{ items: MCPMarketplaceItem[]; categories: string[]; total: number }> {
+  const p = category ? `?category=${encodeURIComponent(category)}` : "";
+  const res = await fetch(`${API_BASE}/mcp/marketplace${p}`, { headers: headers() });
+  return handleRes<any>(res);
+}
+export async function installFromMCPMarketplace(marketplaceId: string, envValues: Record<string, string> = {}, workspacePath = "") {
+  const res = await fetch(`${API_BASE}/mcp/marketplace/install`, {
+    method: "POST", headers: headers(),
+    body: JSON.stringify({ marketplace_id: marketplaceId, env_values: envValues, workspace_path: workspacePath }),
+  });
+  return handleRes<any>(res);
+}
+export async function getMCPServerStatus(serverId: string) {
+  const res = await fetch(`${API_BASE}/mcp/servers/${serverId}/status`, { headers: headers() });
+  return handleRes<{ ok: boolean; tool_count: number; tools: string[]; error?: string }>(res);
+}
+
 // ── Config ──────────────────────────────────────
 export async function getConfig() {
   const res = await fetch(`${API_BASE}/config/`, { headers: headers() });

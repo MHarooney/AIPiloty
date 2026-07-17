@@ -1,7 +1,11 @@
-"""Workspace file browser API — directory & file access with read/write."""
+"""Workspace file browser API — directory & file access with read/write.
+
+Phase IDE: Added create/rename/delete/mkdir + terminal execution endpoint.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -382,3 +386,206 @@ async def workspace_search(
         "total": len(results),
         "truncated": len(results) >= body.max_results,
     }
+
+
+# ── IDE file-management endpoints (create / rename / delete / mkdir) ──────────
+
+
+class CreateFileRequest(BaseModel):
+    path: str = Field(..., description="Relative path for the new file")
+    content: str = Field("", description="Initial file content (empty by default)")
+    project_id: Optional[str] = None
+
+
+class CreateDirRequest(BaseModel):
+    path: str = Field(..., description="Relative path for the new directory")
+    project_id: Optional[str] = None
+
+
+class RenameRequest(BaseModel):
+    old_path: str = Field(..., description="Current relative path")
+    new_path: str = Field(..., description="New relative path")
+    project_id: Optional[str] = None
+
+
+class DeleteRequest(BaseModel):
+    path: str = Field(..., description="Relative path to delete (file or directory)")
+    project_id: Optional[str] = None
+
+
+@router.post("/create-file", status_code=201)
+async def create_file(
+    body: CreateFileRequest,
+    identity: str = Depends(require_auth),
+):
+    """Create a new file in the workspace (fails if it already exists)."""
+    base = _resolve_workspace(body.project_id)
+    target = _validate_path(base, body.path)
+
+    if target.exists():
+        raise HTTPException(409, f"Path already exists: {body.path}")
+    if _is_blocked_file(target):
+        raise HTTPException(403, "Creating this file type is blocked for security reasons")
+    if _is_write_blocked(target, base):
+        raise HTTPException(403, f"Writing inside {target.relative_to(base).parts[0]}/ is blocked")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body.content, encoding="utf-8")
+
+    ext = target.suffix.lower()
+    return {
+        "created": True,
+        "path": str(target.relative_to(base)),
+        "language": _LANG_MAP.get(ext, "plaintext"),
+    }
+
+
+@router.post("/create-dir", status_code=201)
+async def create_directory(
+    body: CreateDirRequest,
+    identity: str = Depends(require_auth),
+):
+    """Create a new directory (and all parent directories) in the workspace."""
+    base = _resolve_workspace(body.project_id)
+    target = _validate_path(base, body.path)
+
+    if target.exists():
+        raise HTTPException(409, f"Directory already exists: {body.path}")
+    if _is_write_blocked(target, base):
+        raise HTTPException(403, f"Writing inside {target.relative_to(base).parts[0]}/ is blocked")
+
+    target.mkdir(parents=True, exist_ok=True)
+    return {"created": True, "path": str(target.relative_to(base))}
+
+
+@router.post("/rename")
+async def rename_path(
+    body: RenameRequest,
+    identity: str = Depends(require_auth),
+):
+    """Rename or move a file or directory within the workspace."""
+    base = _resolve_workspace(body.project_id)
+    src = _validate_path(base, body.old_path)
+    dst = _validate_path(base, body.new_path)
+
+    if not src.exists():
+        raise HTTPException(404, f"Source not found: {body.old_path}")
+    if dst.exists():
+        raise HTTPException(409, f"Destination already exists: {body.new_path}")
+    if _is_blocked_file(dst):
+        raise HTTPException(403, "Renaming to this file type is blocked")
+    if _is_write_blocked(src, base) or _is_write_blocked(dst, base):
+        raise HTTPException(403, "Rename not allowed inside write-blocked directories")
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+    return {
+        "renamed": True,
+        "old_path": str(src.relative_to(base)),
+        "new_path": str(dst.relative_to(base)),
+    }
+
+
+@router.delete("/delete")
+async def delete_path(
+    body: DeleteRequest,
+    identity: str = Depends(require_auth),
+):
+    """Delete a file or directory from the workspace.
+
+    Directories are deleted recursively.  Use with caution.
+    """
+    base = _resolve_workspace(body.project_id)
+    target = _validate_path(base, body.path)
+
+    if not target.exists():
+        raise HTTPException(404, f"Path not found: {body.path}")
+    if _is_write_blocked(target, base):
+        raise HTTPException(403, f"Deleting inside {target.relative_to(base).parts[0]}/ is blocked")
+    # Safety: never delete the workspace root itself
+    if target.resolve() == base.resolve():
+        raise HTTPException(403, "Cannot delete the workspace root")
+
+    was_dir = target.is_dir()
+    if was_dir:
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+    return {
+        "deleted": True,
+        "path": str(target.relative_to(base)),
+        "was_directory": was_dir,
+    }
+
+
+# ── Integrated terminal execution ─────────────────────────────────────────────
+
+
+class TerminalRequest(BaseModel):
+    command: str = Field(..., min_length=1, max_length=500)
+    working_dir: str = Field(".", description="Working directory (relative to workspace)")
+    timeout: int = Field(30, ge=1, le=120, description="Max seconds to wait for command")
+
+
+# Blocklist of dangerous commands — same as guardrails
+_BLOCKED_CMDS = frozenset({
+    "rm -rf /", "rm -rf /*", "mkfs", ":(){:|:&};:", "dd if=/dev/zero",
+    "chmod -R 777 /", "chown -R", "shutdown", "reboot", "halt", "poweroff",
+    "sudo su", "sudo -s",
+})
+
+
+@router.post("/terminal")
+async def run_terminal(
+    body: TerminalRequest,
+    identity: str = Depends(require_auth),
+):
+    """Execute a shell command in the workspace directory.
+
+    Safety: blocks a hardcoded list of destructive commands.
+    Output is capped at 50 KB to prevent memory exhaustion.
+    """
+    cmd = body.command.strip()
+    if any(blocked in cmd for blocked in _BLOCKED_CMDS):
+        raise HTTPException(403, f"Command blocked for safety: {cmd}")
+
+    base = get_settings().resolved_workspace
+    work_dir = _validate_path(base, body.working_dir) if body.working_dir != "." else base
+    if not work_dir.is_dir():
+        work_dir = base
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(work_dir),
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=body.timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": f"Command timed out after {body.timeout}s",
+                "command": cmd,
+                "truncated": False,
+            }
+
+        _MAX_OUT = 50 * 1024  # 50 KB
+        stdout = stdout_b.decode("utf-8", errors="replace")[:_MAX_OUT]
+        stderr = stderr_b.decode("utf-8", errors="replace")[:_MAX_OUT]
+
+        return {
+            "exit_code": proc.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "command": cmd,
+            "truncated": len(stdout_b) > _MAX_OUT or len(stderr_b) > _MAX_OUT,
+            "working_dir": str(work_dir.relative_to(base)),
+        }
+    except Exception as exc:
+        raise HTTPException(500, f"Command execution failed: {exc}")
+

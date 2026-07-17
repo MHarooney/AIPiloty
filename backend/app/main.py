@@ -59,6 +59,7 @@ from .services.tools.testing.browser_tools import (
     BrowserPageMapTool,
     DiscoverPlatformTool,
 )
+from .services.tools.mcp_configure import ConfigureMCPTool
 from .services.agent.testing_orchestrator import TestingOrchestrator
 from .services.rag import EmbeddingService, QdrantStore, RetrieverService, IngestService, TextChunker
 from .services.rag.corrective import CorrectiveRetriever
@@ -291,6 +292,7 @@ async def lifespan(app: FastAPI):
         WebSearchTool(),
         CreatePlanTool(),
         GetPlatformStatsTool(db_session_factory=async_session_factory),
+        ConfigureMCPTool(),   # Phase IDE: AI-driven MCP configuration
     ]
     registry.register_many(tools_list)
 

@@ -4,10 +4,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import AppShell from "@/components/app-shell";
 import FileTree, { type TreeNode } from "@/components/file-tree";
-import { getWorkspaceTree, getWorkspaceFile, saveWorkspaceFile, searchWorkspace, listProjects, type Project } from "@/lib/api";
+import { getWorkspaceTree, getWorkspaceFile, saveWorkspaceFile, searchWorkspace, listProjects, createWorkspaceFile, createWorkspaceDir, renameWorkspacePath, deleteWorkspacePath, type Project } from "@/lib/api";
 import ProjectPickerModal from "@/components/project-picker-modal";
 import MCPSettings from "@/components/mcp-settings";
-import { Code, Loader2, X, FileCode, Save, Circle, Search, GitBranch, Sparkles, FolderPlus, Settings2, ChevronDown, Folder } from "lucide-react";
+import MCPMarketplace from "@/components/mcp-marketplace";
+import IDETerminal from "@/components/ide-terminal";
+import { Code, Loader2, X, FileCode, Save, Circle, Search, GitBranch, Sparkles, FolderPlus, Settings2, ChevronDown, Folder, Terminal, FilePlus, FolderPlus as FolderPlusIcon, Package, Pencil, Trash2, MoreVertical, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor-store";
 import { useRouter } from "next/navigation";
@@ -36,6 +38,13 @@ interface SearchResult {
   content: string;
 }
 
+// ── File context menu ─────────────────────────────────────────────────────
+interface ContextMenu {
+  x: number;
+  y: number;
+  node: TreeNode;
+}
+
 export default function CodeEditorPage() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +57,14 @@ export default function CodeEditorPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"files" | "git">("files");
+  // IDE additions
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [showMCPMarketplace, setShowMCPMarketplace] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [renameNode, setRenameNode] = useState<{ node: TreeNode; value: string } | null>(null);
+  const [newItemTarget, setNewItemTarget] = useState<{ dir: string; type: "file" | "dir" } | null>(null);
+  const [newItemName, setNewItemName] = useState("");
+  const [statusBarInfo, setStatusBarInfo] = useState({ line: 1, col: 1, language: "plaintext" });
   const [showAIChat, setShowAIChat] = useState(false);
   const [selectedText, setSelectedText] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(256);
@@ -269,11 +286,24 @@ export default function CodeEditorPage() {
       const text = editor.getModel()?.getValueInRange(selection) ?? "";
       setSelectedText(text);
     });
+    // Track cursor position for status bar
+    editor.onDidChangeCursorPosition((e: any) => {
+      setStatusBarInfo(prev => ({
+        ...prev,
+        line: e.position.lineNumber,
+        col: e.position.column,
+      }));
+    });
     // Register Cmd+S inside Monaco
     editor.addCommand(
       // Monaco.KeyMod.CtrlCmd | Monaco.KeyCode.KeyS
       2048 | 49,
       () => handleSave()
+    );
+    // Ctrl+` to toggle terminal
+    editor.addCommand(
+      2048 | 90,  // CtrlCmd + backtick is tricky; use a common shortcut
+      () => setShowTerminal(p => !p)
     );
     // "Explain Selection" context menu action
     editor.addAction({
@@ -402,6 +432,12 @@ export default function CodeEditorPage() {
                   >
                     <Settings2 size={11} /> MCP
                   </button>
+                  <button
+                    onClick={() => { setShowProjectDropdown(false); setShowMCPMarketplace(true); }}
+                    className="flex items-center gap-1.5 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    <Package size={11} /> Marketplace
+                  </button>
                 </div>
               </div>
             )}
@@ -421,18 +457,75 @@ export default function CodeEditorPage() {
               <GitBranch size={12} /> Git
             </button>
             {sidebarTab === "files" && (
-              <button
-                onClick={() => setShowSearch((prev) => {
-                  if (!prev) setTimeout(() => searchInputRef.current?.focus(), 50);
-                  return !prev;
-                })}
-                className="ml-auto p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors"
-                title="Search Files (⇧⌘F)"
-              >
-                <Search size={14} />
-              </button>
+              <div className="ml-auto flex items-center gap-0.5">
+                {/* New file */}
+                <button
+                  onClick={() => setNewItemTarget({ dir: ".", type: "file" })}
+                  className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors"
+                  title="New File"
+                >
+                  <FilePlus size={13} />
+                </button>
+                {/* New folder */}
+                <button
+                  onClick={() => setNewItemTarget({ dir: ".", type: "dir" })}
+                  className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors"
+                  title="New Folder"
+                >
+                  <FolderPlusIcon size={13} />
+                </button>
+                {/* Search */}
+                <button
+                  onClick={() => setShowSearch((prev) => {
+                    if (!prev) setTimeout(() => searchInputRef.current?.focus(), 50);
+                    return !prev;
+                  })}
+                  className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors"
+                  title="Search Files (⇧⌘F)"
+                >
+                  <Search size={13} />
+                </button>
+              </div>
             )}
           </div>
+
+          {/* New item inline input */}
+          {newItemTarget && sidebarTab === "files" && (
+            <div className="px-3 py-2 border-b border-gray-800/50">
+              <div className="flex items-center gap-1.5">
+                {newItemTarget.type === "file" ? <FilePlus size={11} className="text-gray-500" /> : <FolderPlusIcon size={11} className="text-gray-500" />}
+                <input
+                  autoFocus
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-200 outline-none focus:border-blue-500"
+                  placeholder={newItemTarget.type === "file" ? "filename.ts" : "folder-name"}
+                  value={newItemName}
+                  onChange={e => setNewItemName(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Escape") { setNewItemTarget(null); setNewItemName(""); }
+                    if (e.key === "Enter" && newItemName.trim()) {
+                      const path = newItemTarget.dir === "." ? newItemName.trim() : `${newItemTarget.dir}/${newItemName.trim()}`;
+                      try {
+                        if (newItemTarget.type === "file") {
+                          await createWorkspaceFile(path, "", activeProjectId ?? undefined);
+                          toast.success(`Created ${path}`);
+                        } else {
+                          await createWorkspaceDir(path, activeProjectId ?? undefined);
+                          toast.success(`Created folder ${path}`);
+                        }
+                        // Reload tree
+                        getWorkspaceTree(undefined, undefined, activeProjectId ?? undefined)
+                          .then(d => setTree(d.tree || []));
+                      } catch (err: any) {
+                        toast.error(err.message);
+                      }
+                      setNewItemTarget(null);
+                      setNewItemName("");
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           {sidebarTab === "files" ? (
             <>
@@ -519,7 +612,7 @@ export default function CodeEditorPage() {
               {tabs.map((tab) => (
                 <button
                   key={tab.path}
-                  onClick={() => setActiveTab(tab.path)}
+                  onClick={() => { setActiveTab(tab.path); setStatusBarInfo(prev => ({ ...prev, language: tab.language })); }}
                   className={`flex items-center gap-2 px-4 py-2.5 text-xs border-r border-gray-800/30 transition-colors whitespace-nowrap ${
                     activeTab === tab.path
                       ? "bg-gray-900 text-gray-200 border-b-2 border-b-indigo-500"
@@ -679,6 +772,42 @@ export default function CodeEditorPage() {
             </div>
             </>
           )}        </div>
+
+        {/* ── Integrated Terminal Panel ──────────────────────────────── */}
+        {showTerminal && (
+          <IDETerminal
+            onClose={() => setShowTerminal(false)}
+          />
+        )}
+
+        {/* ── VS Code-style Status Bar ───────────────────────────────── */}
+        <div className="flex-shrink-0 flex items-center justify-between px-3 py-0.5 bg-blue-700/90 text-[10px] text-blue-100 font-mono select-none">
+          <div className="flex items-center gap-3">
+            {activeTab && (
+              <>
+                <span className="opacity-80">Ln {statusBarInfo.line}, Col {statusBarInfo.col}</span>
+                <span className="opacity-60">|</span>
+                <span className="capitalize opacity-80">{statusBarInfo.language}</span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowTerminal(p => !p)}
+              className="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity"
+              title="Toggle Terminal (Ctrl+`)"
+            >
+              <Terminal size={10} /> Terminal
+            </button>
+            <button
+              onClick={() => setShowMCPMarketplace(true)}
+              className="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity"
+              title="MCP Marketplace"
+            >
+              <Package size={10} /> MCP
+            </button>
+          </div>
+        </div>
       </div>
       {showProjectPicker && (
         <ProjectPickerModal
@@ -694,6 +823,12 @@ export default function CodeEditorPage() {
       )}
       {showMCPSettings && (
         <MCPSettings onClose={() => setShowMCPSettings(false)} />
+      )}
+      {showMCPMarketplace && (
+        <MCPMarketplace
+          onClose={() => setShowMCPMarketplace(false)}
+          onInstalled={() => toast.success("MCP server installed — reload agent to use new tools")}
+        />
       )}
     </AppShell>
   );
