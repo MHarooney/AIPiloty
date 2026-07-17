@@ -26,6 +26,7 @@ from ..llm.ollama_service import OllamaService
 from ..tools.base import BaseTool, ToolResult
 from ..tools.registry import ToolRegistry
 from .guardrails import GuardrailService
+from ..memory.working_memory import WorkingMemory
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +350,9 @@ class AgentOrchestrator:
     Works with ANY Ollama model — no native tool support required.
     The model is instructed to output JSON tool-call blocks in its text,
     which we parse, execute, and feed results back as conversation messages.
+
+    Phase 2: accepts optional ``evaluator`` (SelfEvaluator) for post-generation
+    quality assessment and single-retry correction loop.
     """
 
     def __init__(
@@ -359,6 +363,8 @@ class AgentOrchestrator:
         get_all_vms_func=None,
         attachment_storage=None,
         memory=None,
+        evaluator=None,         # Phase 2: SelfEvaluator | None
+        episodic_store=None,    # Phase 3: EpisodicStore | None
     ):
         self._llm = llm
         self._registry = registry
@@ -366,6 +372,8 @@ class AgentOrchestrator:
         self._get_all_vms = get_all_vms_func
         self._attachment_storage = attachment_storage
         self._memory = memory  # AgentMemory | None
+        self._evaluator = evaluator  # SelfEvaluator | None
+        self._episodic = episodic_store  # EpisodicStore | None
 
     def _resolve_attachments(
         self, msg: dict[str, Any], attachment_ids: list[str]
@@ -405,8 +413,10 @@ class AgentOrchestrator:
         messages: list[dict[str, Any]],
         auto_approve: bool = False,
         model: str | None = None,
+        session_key: str | None = None,    # Phase 3: for episodic episode tagging
     ) -> AsyncGenerator[SSEEvent, None]:
         """Execute the ReAct agent loop, yielding SSE events."""
+        kwargs = {"session_key": session_key}
 
         # Build system prompt with tool descriptions (cached — pure function of tools)
         all_tools = self._registry.all_tools()
@@ -451,6 +461,37 @@ class AgentOrchestrator:
             if mem_context:
                 system_prompt += f"\n\n{mem_context}"
 
+        # ── Phase 3: Episodic Memory Recall ──────────────────────────────
+        # Extract latest user question for semantic episode search
+        _latest_user_msg = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
+        _working_mem = WorkingMemory()
+
+        if self._episodic and _latest_user_msg:
+            try:
+                recalls = await self._episodic.recall(
+                    query=str(_latest_user_msg)[:400], top_k=3, min_score=0.55
+                )
+                if recalls:
+                    for i, ep in enumerate(recalls, 1):
+                        _working_mem.add_episodic_recall(ep.format_for_prompt(i))
+                    yield SSEEvent("log", {
+                        "level": "info",
+                        "message": f"Episodic memory: recalled {len(recalls)} relevant past episode(s)",
+                        "timestamp": 0,
+                    })
+            except Exception as _ep_err:
+                logger.debug("Episodic recall skipped: %s", _ep_err)
+
+        _working_mem.set_objective(str(_latest_user_msg)[:200])
+
+        wm_section = _working_mem.format_for_prompt()
+        if wm_section:
+            system_prompt += f"\n\n{wm_section}"
+        # ── End Phase 3 episodic injection ───────────────────────────────
+
         # Wrap user messages through guardrails (prompt-injection defense + PII redaction)
         # and resolve any file attachments (images → base64, documents → extracted text)
         safe_messages = []
@@ -488,6 +529,9 @@ class AgentOrchestrator:
         # Track execution steps for the final report
         execution_steps: list[dict[str, Any]] = []
         tool_findings: list[dict[str, Any]] = []
+        # Phase 2: single retry flag + accumulated context for evaluator
+        _eval_retry_done: bool = False
+        _tool_context_parts: list[str] = []  # tool results for self-evaluator context
         total_tools_run = 0
         url_fetch_nudge_sent = False
 
@@ -636,6 +680,45 @@ class AgentOrchestrator:
                     out = content.strip() or "I've completed the request."
                     yield SSEEvent("token", {"token": out, "done": True})
 
+                # ── Phase 2: Self-Evaluator ──────────────────────────────
+                final_answer_text = content.strip()
+                settings = get_settings()
+
+                if (
+                    self._evaluator is not None
+                    and settings.agent_self_eval_enabled
+                    and not _eval_retry_done
+                    and final_answer_text
+                    and _tool_context_parts  # only evaluate when tools were used
+                ):
+                    user_question = next(
+                        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                        "",
+                    )
+                    eval_context = "\n\n---\n\n".join(_tool_context_parts[-6:])  # last 6 tool outputs
+                    eval_result = await self._evaluator.evaluate(
+                        question=str(user_question)[:400],
+                        context=eval_context[:2000],
+                        answer=final_answer_text[:1200],
+                    )
+                    yield SSEEvent("evaluation", eval_result.to_sse_payload())
+
+                    if eval_result.eval_ok and eval_result.should_retry:
+                        _eval_retry_done = True
+                        correction_msg = eval_result.correction_hint(str(user_question)[:200])
+                        conversation.append({"role": "assistant", "content": content})
+                        conversation.append({"role": "user", "content": correction_msg})
+                        yield SSEEvent("log", {
+                            "level": "warn",
+                            "message": (
+                                f"Self-eval score={eval_result.overall:.0%} < threshold "
+                                f"({settings.agent_self_eval_threshold:.0%}) — running correction turn"
+                            ),
+                            "timestamp": time.monotonic() - start_time,
+                        })
+                        continue  # one more LLM pass with the correction prompt
+                # ── End Phase 2 ──────────────────────────────────────────
+
                 # Emit final report if tools were used
                 if total_tools_run > 0:
                     elapsed_final = time.monotonic() - start_time
@@ -658,6 +741,25 @@ class AgentOrchestrator:
                         "tools_used": total_tools_run,
                         "iterations": iteration,
                     })
+
+                # ── Phase 3: Store episode in episodic memory ─────────────
+                if self._episodic and total_tools_run > 0:
+                    episode_summary = _working_mem.to_episode_summary()
+                    if episode_summary:
+                        category = _working_mem.infer_category()
+                        session_id = kwargs.get("session_key") or "unknown"
+                        try:
+                            await self._episodic.remember(
+                                summary=episode_summary,
+                                category=category,
+                                session_id=str(session_id),
+                                importance=min(0.9, 0.4 + success_rate * 0.5),
+                            )
+                            logger.debug("Stored episode: %s (category=%s)", episode_summary[:60], category)
+                        except Exception as _ep_store_err:
+                            logger.debug("Episode storage skipped: %s", _ep_store_err)
+                # ── End Phase 3 episode storage ───────────────────────────
+
                 return
 
             # Tool call — thinking text was mostly streamed live above;
@@ -857,6 +959,15 @@ class AgentOrchestrator:
                 yield SSEEvent("terminal_output", terminal_payload)
 
             last_tool_result_fallback = json.dumps(result_dict, indent=2)
+            # Phase 2: accumulate tool output for self-evaluator context
+            if _success and isinstance(result_dict, dict):
+                _out = result_dict.get("output", "")
+                if _out and isinstance(_out, str):
+                    _tool_context_parts.append(f"[{tool_name}]: {_out[:600]}")
+                    # Phase 3: feed tool result into working memory
+                    _working_mem.add_tool_summary(tool_name, _out[:300], success=True)
+            elif isinstance(result_dict, dict) and result_dict.get("error"):
+                _working_mem.add_tool_summary(tool_name, result_dict["error"][:200], success=False)
 
             # Add assistant message + tool result to conversation
             conversation.append({"role": "assistant", "content": content})

@@ -72,6 +72,71 @@ class Settings(BaseSettings):
     kb_chunk_size: int = 512
     kb_chunk_overlap: int = 64
 
+    # ── Phase 1 RAG enhancements ─────────────────────────────────────────
+    # Cross-encoder reranker (sentence-transformers).
+    # Retrieve rag_rerank_fetch_multiplier × top_k candidates, rerank to top_k.
+    # Requires: pip install sentence-transformers
+    rag_rerank_enabled: bool = True
+    rag_rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rag_rerank_fetch_multiplier: int = 4  # fetch 4× top_k, rerank to top_k
+
+    # Multi-query expansion — generate N alternative phrasings via LLM, fuse via RRF.
+    rag_multi_query_enabled: bool = True
+    rag_multi_query_variants: int = 3  # additional phrasings beyond the original
+
+    # HyDE — generate a hypothetical answer and use it for vector embedding.
+    rag_hyde_enabled: bool = True
+
+    # Conversation-aware query rewriting — resolve coreferences in multi-turn chat.
+    rag_query_rewrite_enabled: bool = True
+
+    # ── Phase 2 Agentic Self-Correction enhancements ─────────────────────
+    # CRAG — Corrective RAG: score chunk relevance after retrieval.
+    # Poor scores trigger a web-search hint for the LLM.
+    rag_crag_enabled: bool = True
+    rag_crag_high_threshold: float = 0.5   # above → "good" quality
+    rag_crag_low_threshold: float = 0.10   # below → "poor" (suggest web search)
+
+    # Self-Evaluator — score LLM answer after generation; retry if below threshold.
+    agent_self_eval_enabled: bool = True
+    agent_self_eval_threshold: float = 0.65  # overall score below this triggers retry
+
+    # ── Phase 3 Semantic Memory enhancements ─────────────────────────────
+    # Episodic memory — Qdrant collection for vector-indexed past episodes.
+    memory_episodic_enabled: bool = True
+    memory_episodic_collection: str = "aipiloty_episodic_memory"
+    memory_episodic_max_episodes: int = 1000
+    memory_episodic_recall_top_k: int = 3      # episodes recalled per conversation
+    memory_episodic_min_score: float = 0.55    # cosine threshold for episode recall
+    # Working memory — in-context structured scratchpad.
+    memory_working_token_budget: int = 2048    # characters reserved in system prompt
+
+    # ── Phase 4 Graph RAG (LazyGraphRAG) ─────────────────────────────────
+    # Entity extraction + SQLite KG + graph-aware retrieval.
+    rag_graph_enabled: bool = True
+    rag_graph_hops: int = 1            # neighbourhood expansion depth (1 = co-occurring entities)
+    rag_graph_top_k: int = 10          # graph lane returns up to this many chunks
+    rag_graph_llm_extraction: bool = True  # use LLM for NER (False = regex only, faster)
+
+    # ── Phase 5 Advanced Chunking + RAPTOR + Model Router ────────────────
+    # AST code chunker (tree-sitter) — for .py / .js / .ts files.
+    kb_ast_chunk_enabled: bool = True
+    kb_ast_chunk_max_chars: int = 3000   # max chars per AST node chunk
+
+    # Semantic chunker — cosine breakpoints (requires Ollama for embeddings).
+    kb_semantic_chunk_enabled: bool = False  # off by default (slower)
+    kb_semantic_chunk_threshold: float = 0.72  # similarity below this = split
+    kb_semantic_chunk_max_chars: int = 1500
+
+    # RAPTOR summary tree — multi-level abstractive summaries post-ingest.
+    rag_raptor_enabled: bool = False   # off by default (LLM call per 5 chunks)
+    rag_raptor_cluster_size: int = 5   # chunks grouped per summary
+    rag_raptor_max_levels: int = 2     # L1 + L2 above raw chunks
+
+    # Model router — fast vs smart vs coder model selection.
+    ollama_smart_model: str = ""       # if empty: same as ollama_model
+    ollama_coder_model: str = ""       # if empty: same as ollama_model
+
     # Docker Hub credentials (used by pipeline executor for docker push)
     docker_hub_username: Optional[str] = None
     docker_hub_password: Optional[str] = None

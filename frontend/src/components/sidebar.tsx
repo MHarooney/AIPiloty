@@ -7,7 +7,7 @@ import {
   MessageSquare, Server, Rocket, LayoutDashboard,
   Plus, Trash2, ChevronLeft, Sparkles,
   BookOpen, Database, Code, Settings, Image, LogOut, Activity,
-  Clock, Globe, FileText, TestTube2, BookMarked, HardDrive,
+  Clock, Globe, FileText, TestTube2, BookMarked, HardDrive, Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -39,6 +39,7 @@ const NAV_GROUPS = [
       { href: "/code-editor", icon: Code, tKey: "nav.codeEditor" },
       { href: "/database", icon: Database, tKey: "nav.database" },
       { href: "/knowledge", icon: BookOpen, tKey: "nav.knowledge" },
+      { href: "/memory", icon: Brain, tKey: "nav.memory" },
       { href: "/doc-studio", icon: BookMarked, tKey: "nav.docStudio" },
     ],
   },

@@ -147,7 +147,25 @@ async def chat_stream(
         _cancel_events[session_key] = cancel_event
 
         try:
-            async for event in orchestrator.run(messages, auto_approve=req.auto_approve, model=req.model):
+            # Phase 5: model routing — auto-select fast/smart/coder model
+            model_override = req.model
+            if not model_override:
+                router = app_state.get("model_router")
+                if router is not None:
+                    last_user_msg = next(
+                        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                        "",
+                    )
+                    decision = router.route(str(last_user_msg))
+                    model_override = decision.model
+                    logger.debug("ModelRouter: complexity=%s → model=%s", decision.complexity, decision.model)
+
+            async for event in orchestrator.run(
+                messages,
+                auto_approve=req.auto_approve,
+                model=model_override,
+                session_key=session_key,
+            ):
                 # Check for client-requested cancellation before yielding each event
                 if cancel_event.is_set():
                     yield f"data: {json.dumps({'type': 'cancelled', 'data': {'session_key': session_key}})}\n\n"

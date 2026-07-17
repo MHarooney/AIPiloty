@@ -132,6 +132,17 @@ class TestIngestAllowlist:
 
 class TestRetrieverService:
 
+    def _mock_settings(self):
+        m = MagicMock()
+        m.rag_rerank_enabled = False
+        m.rag_rerank_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        m.rag_rerank_fetch_multiplier = 4
+        m.rag_multi_query_enabled = False
+        m.rag_multi_query_variants = 3
+        m.rag_hyde_enabled = False
+        m.rag_query_rewrite_enabled = False
+        return m
+
     @pytest.mark.asyncio
     async def test_search_returns_formatted_results(self):
         from app.services.rag.retriever import RetrieverService, RetrievalResult
@@ -150,15 +161,17 @@ class TestRetrieverService:
                 chunk_index=0,
             )
         ])
+        store.keyword_search = AsyncMock(return_value=[])
 
-        svc = RetrieverService(store=store, embeddings=embed)
+        with patch("app.services.rag.retriever.get_settings") as ms:
+            ms.return_value = self._mock_settings()
+            svc = RetrieverService(store=store, embeddings=embed)
+            results = await svc.search("how to setup")
 
-        results = await svc.search("how to setup")
         assert len(results) == 1
         assert results[0].content == "Test content"
-        assert results[0].score == pytest.approx(results[0].score, abs=1.0)  # score varies by impl
+        assert results[0].score == pytest.approx(results[0].score, abs=1.0)
 
-        # format_citation
         citation = results[0].format_citation(1)
         assert "[1]" in citation
         assert "docs/readme.md" in citation
@@ -172,10 +185,13 @@ class TestRetrieverService:
 
         store = AsyncMock()
         store.search = AsyncMock(return_value=[])
+        store.keyword_search = AsyncMock(return_value=[])
 
-        svc = RetrieverService(store=store, embeddings=embed)
+        with patch("app.services.rag.retriever.get_settings") as ms:
+            ms.return_value = self._mock_settings()
+            svc = RetrieverService(store=store, embeddings=embed)
+            results = await svc.search("anything")
 
-        results = await svc.search("anything")
         assert len(results) == 0
 
 
@@ -199,6 +215,7 @@ class TestKnowledgeSearchTool:
                 score=0.88,
             ),
         ])
+        mock_retriever.reranker_available = False  # Phase 1 property
 
         tool = KnowledgeSearchTool(retriever=mock_retriever)
         assert tool.name == "kb_search"
@@ -214,6 +231,7 @@ class TestKnowledgeSearchTool:
 
         mock_retriever = AsyncMock()
         mock_retriever.search = AsyncMock(return_value=[])
+        mock_retriever.reranker_available = False
 
         tool = KnowledgeSearchTool(retriever=mock_retriever)
         result = await tool.execute(query="nonexistent topic")
@@ -246,3 +264,265 @@ class TestQdrantStore:
             # is_available uses sync client under the hood
             available = await store.is_available()
             assert isinstance(available, bool)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Tests: Reranker, QueryRewriter, QueryExpander, HyDE
+# ---------------------------------------------------------------------------
+
+class TestReranker:
+    """Unit tests for cross-encoder reranker (graceful degradation path)."""
+
+    def test_reranker_returns_top_k_when_model_unavailable(self):
+        """When sentence-transformers model is absent, returns first top_k results."""
+        from app.services.rag.reranker import Reranker
+        from app.services.rag.retriever import RetrievalResult
+
+        reranker = Reranker(model_name="nonexistent-model-that-wont-load")
+        # Force load attempted so we don't retry
+        import app.services.rag.reranker as rr_mod
+        rr_mod._load_attempted = True
+        rr_mod._cross_encoder = None
+
+        results = [
+            RetrievalResult(content=f"doc {i}", source_path=f"doc{i}.md", heading="", score=float(i))
+            for i in range(10)
+        ]
+        out = reranker.rerank("test query", results, top_k=3)
+        assert len(out) == 3
+        # First 3 when no model
+        assert out[0].content == "doc 0"
+
+    def test_reranker_handles_empty_list(self):
+        from app.services.rag.reranker import Reranker
+        reranker = Reranker()
+        out = reranker.rerank("query", [], top_k=5)
+        assert out == []
+
+    def test_reranker_with_fewer_results_than_top_k(self):
+        from app.services.rag.reranker import Reranker
+        from app.services.rag.retriever import RetrievalResult
+        import app.services.rag.reranker as rr_mod
+        rr_mod._load_attempted = True
+        rr_mod._cross_encoder = None
+
+        reranker = Reranker()
+        results = [
+            RetrievalResult(content="only one", source_path="a.md", heading="", score=0.9)
+        ]
+        out = reranker.rerank("query", results, top_k=5)
+        assert len(out) == 1  # can't return more than we have
+
+
+class TestQueryRewriter:
+    """Unit tests for conversation-aware query rewriter."""
+
+    @pytest.mark.asyncio
+    async def test_standalone_query_not_rewritten(self):
+        """A self-contained query with no pronouns should pass through unchanged."""
+        from app.services.rag.query_rewriter import QueryRewriter
+        mock_llm = AsyncMock()
+        rw = QueryRewriter(llm=mock_llm)
+        out = await rw.rewrite("How do I configure Nginx?", conversation_history=[])
+        assert out == "How do I configure Nginx?"
+        mock_llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pronoun_query_triggers_rewrite(self):
+        """Query with 'it' + history should trigger LLM rewrite."""
+        from app.services.rag.query_rewriter import QueryRewriter
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(return_value="How do I restart the Nginx service?")
+        rw = QueryRewriter(llm=mock_llm)
+        history = [
+            {"role": "user", "content": "My Nginx is failing"},
+            {"role": "assistant", "content": "Check the service status."},
+        ]
+        out = await rw.rewrite("Can you fix it?", conversation_history=history)
+        assert "Nginx" in out or "fix" in out  # content from rewrite
+        mock_llm.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rewrite_falls_back_on_llm_error(self):
+        """If LLM throws, the original query is returned (no crash)."""
+        from app.services.rag.query_rewriter import QueryRewriter
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+        rw = QueryRewriter(llm=mock_llm)
+        history = [{"role": "user", "content": "something relevant"}]
+        original = "Fix it"
+        out = await rw.rewrite(original, conversation_history=history)
+        assert out == original  # graceful fallback
+
+    @pytest.mark.asyncio
+    async def test_no_history_no_rewrite(self):
+        """Empty conversation history means no rewrite attempt, even with pronouns."""
+        from app.services.rag.query_rewriter import QueryRewriter
+        mock_llm = AsyncMock()
+        rw = QueryRewriter(llm=mock_llm)
+        out = await rw.rewrite("Fix it", conversation_history=[])
+        # _needs_rewriting returns False for empty history
+        assert out == "Fix it"
+        mock_llm.generate.assert_not_called()
+
+
+class TestQueryExpander:
+    """Unit tests for multi-query expansion and HyDE."""
+
+    @pytest.mark.asyncio
+    async def test_expander_returns_variants(self):
+        from app.services.rag.query_expander import QueryExpander
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(return_value=(
+            "How to set up Nginx reverse proxy\n"
+            "Nginx configuration for web server\n"
+            "Configure Nginx proxy settings"
+        ))
+        expander = QueryExpander(llm=mock_llm, n_variants=3)
+        results = await expander.expand("How do I configure Nginx?")
+        assert results[0] == "How do I configure Nginx?"  # original always first
+        assert len(results) >= 2  # at least original + 1 variant
+
+    @pytest.mark.asyncio
+    async def test_expander_falls_back_on_llm_error(self):
+        from app.services.rag.query_expander import QueryExpander
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+        expander = QueryExpander(llm=mock_llm, n_variants=3)
+        results = await expander.expand("What is Docker?")
+        assert results == ["What is Docker?"]  # only original on failure
+
+    @pytest.mark.asyncio
+    async def test_expander_handles_empty_query(self):
+        from app.services.rag.query_expander import QueryExpander
+        mock_llm = AsyncMock()
+        expander = QueryExpander(llm=mock_llm)
+        results = await expander.expand("")
+        assert results == [""]
+
+    @pytest.mark.asyncio
+    async def test_hyde_expander_concatenates_answer(self):
+        from app.services.rag.query_expander import HyDEExpander
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(
+            return_value="Nginx is configured via /etc/nginx/nginx.conf using server blocks."
+        )
+        hyde = HyDEExpander(llm=mock_llm)
+        result = await hyde.expand("How do I configure Nginx?")
+        assert "How do I configure Nginx?" in result
+        assert "nginx.conf" in result  # hypothetical answer included
+        assert "\n\n" in result  # separated by blank line
+
+    @pytest.mark.asyncio
+    async def test_hyde_falls_back_on_llm_error(self):
+        from app.services.rag.query_expander import HyDEExpander
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+        hyde = HyDEExpander(llm=mock_llm)
+        query = "What port does Redis use?"
+        result = await hyde.expand(query)
+        assert result == query  # graceful fallback
+
+    @pytest.mark.asyncio
+    async def test_expand_with_hyde_and_multi_query_both_active(self):
+        """Combined helper runs both concurrently and returns (hyde_query, all_queries)."""
+        from app.services.rag.query_expander import expand_with_hyde_and_multi_query
+
+        mock_llm = AsyncMock()
+        # HyDE → hypothetical answer
+        # MultiQuery → 3 alternatives
+        generate_calls = [
+            # HyDE call
+            "Redis uses port 6379 by default. Configure in redis.conf.",
+            # MultiQuery call
+            "What is the default Redis port\nRedis port number configuration\nRedis listening port",
+        ]
+        call_idx = {"n": 0}
+
+        async def side_effect(prompt, system=None):
+            idx = call_idx["n"]
+            call_idx["n"] += 1
+            return generate_calls[idx] if idx < len(generate_calls) else ""
+
+        mock_llm.generate = side_effect
+        original = "What port does Redis use?"
+        hyde_q, all_q = await expand_with_hyde_and_multi_query(
+            original, mock_llm, use_hyde=True, use_multi_query=True
+        )
+        assert original in hyde_q          # HyDE query contains original
+        assert all_q[0] == original        # original always first in all_queries
+        assert len(all_q) >= 1
+
+
+class TestRetrieverPhase1:
+    """Integration-style tests for Phase 1 retriever enhancements (mocked LLM)."""
+
+    def _make_settings(self, **overrides):
+        """Return a Settings-like mock with Phase 1 flags."""
+        defaults = {
+            "rag_rerank_enabled": False,   # off by default in tests (no model)
+            "rag_rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "rag_rerank_fetch_multiplier": 4,
+            "rag_multi_query_enabled": False,  # off to keep tests fast
+            "rag_multi_query_variants": 3,
+            "rag_hyde_enabled": False,
+            "rag_query_rewrite_enabled": False,
+        }
+        defaults.update(overrides)
+        m = MagicMock()
+        for k, v in defaults.items():
+            setattr(m, k, v)
+        return m
+
+    @pytest.mark.asyncio
+    async def test_search_with_all_features_disabled(self):
+        """With all Phase 1 flags off, retriever behaves exactly as before."""
+        from app.services.rag.retriever import RetrieverService, RetrievalResult
+        from app.services.rag.vector_store import SearchResult
+
+        embed = AsyncMock()
+        embed.embed_one = AsyncMock(return_value=[0.1] * 768)
+        store = AsyncMock()
+        store.search = AsyncMock(return_value=[
+            SearchResult(content="Doc A", source_path="a.md", heading="", score=0.9, chunk_index=0)
+        ])
+        store.keyword_search = AsyncMock(return_value=[])
+
+        with patch("app.services.rag.retriever.get_settings") as ms:
+            ms.return_value = self._make_settings()
+            svc = RetrieverService(store=store, embeddings=embed, llm=None)
+            results = await svc.search("test query", top_k=5)
+
+        assert len(results) == 1
+        assert results[0].source_path == "a.md"
+
+    @pytest.mark.asyncio
+    async def test_rrf_fuse_many_deduplicates_across_lists(self):
+        """Items appearing in multiple lists get a higher fused score."""
+        from app.services.rag.retriever import RetrieverService, RetrievalResult
+
+        r_a = RetrievalResult(content="shared", source_path="x.md", heading="", score=0.9)
+        r_b = RetrievalResult(content="unique", source_path="y.md", heading="", score=0.8)
+        r_c = RetrievalResult(content="shared", source_path="x.md", heading="", score=0.7)
+
+        fused = RetrieverService._rrf_fuse_many([[r_a, r_b], [r_c]], top_k=2)
+        # "shared" appears in both lists — should rank higher after fusion
+        assert fused[0].source_path == "x.md"
+
+    def test_rrf_fuse_many_handles_empty_list(self):
+        from app.services.rag.retriever import RetrieverService
+        assert RetrieverService._rrf_fuse_many([], top_k=5) == []
+
+    def test_rrf_fuse_many_single_list(self):
+        from app.services.rag.retriever import RetrieverService, RetrievalResult
+        results = [RetrievalResult(content=f"doc{i}", source_path=f"{i}.md", heading="", score=float(i)) for i in range(5)]
+        fused = RetrieverService._rrf_fuse_many([results], top_k=3)
+        assert len(fused) == 3
+
+    def test_rrf_fuse_backwards_compat(self):
+        """_rrf_fuse (two-list helper) still works for existing tests."""
+        from app.services.rag.retriever import RetrieverService, RetrievalResult
+        a = [RetrievalResult(content="A", source_path="a.md", heading="", score=0.9)]
+        b = [RetrievalResult(content="B", source_path="b.md", heading="", score=0.8)]
+        fused = RetrieverService._rrf_fuse(a, b, top_k=2)
+        assert len(fused) == 2

@@ -23,6 +23,12 @@ httpx>=0.27,<1.0
 
 # RAG — vector store
 qdrant-client>=1.9,<2.0
+# RAG — Phase 1: cross-encoder reranker (lazy-loaded; ~90 MB on first use; CPU-only / Apple M2)
+sentence-transformers>=3.0,<4.0
+# RAG — Phase 5: AST code chunker (tree-sitter; ~1 MB; fast CPU parsing)
+tree-sitter>=0.21,<0.25
+tree-sitter-python>=0.25
+tree-sitter-javascript>=0.25
 
 # SSH
 fabric>=3.2,<4.0

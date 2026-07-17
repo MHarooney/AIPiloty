@@ -1,4 +1,9 @@
-"""Ingest files from allowlisted paths into Qdrant via Ollama embeddings."""
+"""Ingest files from allowlisted paths into Qdrant via Ollama embeddings.
+
+Phase 4 (2026-07-17): Added entity extraction after chunking.
+Each chunk's named entities are extracted and stored in the KG (GraphStore)
+for graph-aware retrieval (LazyGraphRAG pattern).
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ...core.config import get_settings
 from .chunker import TextChunker
@@ -73,17 +78,38 @@ def _hash_content(content: str) -> str:
 
 
 class IngestService:
-    """Walk allowlisted paths, chunk, embed, and upsert into Qdrant."""
+    """Walk allowlisted paths, chunk, embed, and upsert into Qdrant.
+
+    Phase 4: optionally extract entities and store in GraphStore.
+    Phase 5: AST code chunking for .py/.js/.ts, optional RAPTOR summaries.
+
+    Args:
+        store:            QdrantStore instance.
+        embeddings:       EmbeddingService instance.
+        chunker:          TextChunker instance (Markdown + sliding window).
+        graph_store:      Optional GraphStore for entity extraction (Phase 4).
+        entity_extractor: Optional EntityExtractor for NER (Phase 4).
+        ast_chunker:      Optional ASTChunker for code files (Phase 5).
+        raptor_builder:   Optional RaptorBuilder for summary tree (Phase 5).
+    """
 
     def __init__(
         self,
         store: QdrantStore,
         embeddings: EmbeddingService,
         chunker: TextChunker,
+        graph_store: Optional[Any] = None,
+        entity_extractor: Optional[Any] = None,
+        ast_chunker: Optional[Any] = None,      # Phase 5
+        raptor_builder: Optional[Any] = None,   # Phase 5
     ) -> None:
         self._store = store
         self._embeddings = embeddings
         self._chunker = chunker
+        self._graph = graph_store
+        self._extractor = entity_extractor
+        self._ast_chunker = ast_chunker
+        self._raptor = raptor_builder
 
     def _validate_path(self, path: str) -> Path:
         """Ensure *path* is under one of the configured allowlisted roots."""
@@ -180,6 +206,32 @@ class IngestService:
                             continue
 
                     chunks = self._chunker.chunk_file(fp_str, content)
+
+                    # ── Phase 5: AST code chunking ────────────────────────
+                    settings = get_settings()
+                    ext = filepath.suffix.lower()
+                    if (
+                        settings.kb_ast_chunk_enabled
+                        and self._ast_chunker is not None
+                        and ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs")
+                    ):
+                        ast_chunks = self._ast_chunker.chunk_file(fp_str, content)
+                        if len(ast_chunks) >= 2:
+                            # Convert ASTChunks to TextChunker-compatible format
+                            from .chunker import Chunk
+                            chunks = [
+                                Chunk(
+                                    content=ac.content,
+                                    source_path=ac.source_path,
+                                    chunk_index=ac.chunk_index,
+                                    heading=ac.heading,
+                                    content_hash=ac.content_hash,
+                                )
+                                for ac in ast_chunks
+                            ]
+                            logger.info("AST chunker: %s → %d AST chunks", filepath, len(chunks))
+                    # ── End Phase 5 AST ───────────────────────────────────
+
                     if not chunks:
                         continue
 
@@ -207,6 +259,52 @@ class IngestService:
                     total_files += 1
                     total_chunks += count
                     logger.info("Ingested %s → %d chunks", filepath, count)
+
+                    # ── Phase 4: Entity extraction for KG ────────────────
+                    settings = get_settings()
+                    if (
+                        settings.rag_graph_enabled
+                        and self._graph is not None
+                        and self._extractor is not None
+                    ):
+                        # Use "source_path::chunk_index" as stable KG chunk identifier.
+                        # This avoids needing the Qdrant internal UUID.
+                        for chunk in chunks:
+                            stable_id = f"{fp_str}::{chunk.chunk_index}"
+                            try:
+                                result = await self._extractor.extract(
+                                    chunk.content, source_path=fp_str
+                                )
+                                if result.entities:
+                                    await self._graph.add_entities_from_chunk(
+                                        chunk_id=stable_id,
+                                        source_path=fp_str,
+                                        entities=result.entities,
+                                        relations=result.relations,
+                                    )
+                            except Exception as _kg_err:
+                                logger.debug(
+                                    "Entity extraction skipped for chunk %s: %s",
+                                    stable_id, _kg_err,
+                                )
+                    # ── End Phase 4 ───────────────────────────────────────
+
+                    # ── Phase 5: RAPTOR summary tree ──────────────────────
+                    if (
+                        settings.rag_raptor_enabled
+                        and self._raptor is not None
+                        and len(chunks) >= 2
+                    ):
+                        try:
+                            chunk_texts = [c.content for c in chunks]
+                            await self._raptor.build_for_source(
+                                source_path=fp_str,
+                                chunks=chunk_texts,
+                                extra_payload=extra_payload or {},
+                            )
+                        except Exception as _rap_err:
+                            logger.debug("RAPTOR skipped for %s: %s", fp_str, _rap_err)
+                    # ── End Phase 5 RAPTOR ────────────────────────────────
 
                 except Exception as e:
                     msg = f"Failed to ingest {filepath}: {e}"

@@ -137,3 +137,42 @@ async def delete_source(
     store = _get_store()
     await store.delete_by_source(body.source_path)
     return {"deleted": True, "source_path": body.source_path}
+
+
+# ── Phase 4: Graph RAG endpoints ─────────────────────────────────────────
+
+def _get_graph_store():
+    gs = app_state.get("graph_store")
+    if gs is None:
+        raise HTTPException(503, "Graph store not initialised (Phase 4 disabled?)")
+    return gs
+
+
+@router.get("/graph/stats")
+async def graph_stats(identity: str = Depends(require_auth)):
+    """Return knowledge graph statistics."""
+    gs = _get_graph_store()
+    return await gs.get_stats()
+
+
+@router.get("/graph/entities")
+async def graph_entities(
+    limit: int = Query(50, ge=1, le=200),
+    entity_type: Optional[str] = Query(None),
+    identity: str = Depends(require_auth),
+):
+    """Return top entities from the knowledge graph (for KG explorer UI)."""
+    gs = _get_graph_store()
+    return {"entities": await gs.get_top_entities(limit=limit, entity_type=entity_type)}
+
+
+@router.get("/graph/entities/{node_id}/neighbors")
+async def graph_neighbors(
+    node_id: str,
+    limit: int = Query(20, ge=1, le=50),
+    identity: str = Depends(require_auth),
+):
+    """Return neighbours of a specific entity node."""
+    gs = _get_graph_store()
+    return {"neighbors": await gs.get_entity_neighbors(node_id, limit=limit)}
+

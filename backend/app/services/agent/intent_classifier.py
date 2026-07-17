@@ -1,4 +1,9 @@
-"""Intent classifier — categorize user messages for optimal tool routing."""
+"""Intent classifier — categorize user messages for optimal tool routing.
+
+Phase 2 (2026-07-17): Added ``needs_retrieval()`` for Self-RAG intent-gated
+retrieval.  Purely conversational messages skip the RAG pipeline entirely,
+reducing latency and avoiding irrelevant context injection.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +21,35 @@ class Intent:
     suggested_tools: list[str]
     context_hints: dict[str, str]
 
+
+# ── Conversational patterns that never need RAG ───────────────────────────
+# Short social exchanges where KB retrieval would add noise and latency.
+_CONVERSATIONAL_RE = re.compile(
+    r"^\s*("
+    r"(hi|hello|hey|howdy|yo)\b[!?. ]*|"
+    r"thank(s| you)[!?. ]*|"
+    r"ok(ay)?[!?. ]*|"
+    r"great[!?. ]*|"
+    r"perfect[!?. ]*|"
+    r"got it[!?. ]*|"
+    r"understood[!?. ]*|"
+    r"sounds good[!?. ]*|"
+    r"cool[!?. ]*|"
+    r"nice[!?. ]*|"
+    r"awesome[!?. ]*|"
+    r"sure[!?. ]*|"
+    r"yes[!?. ]*|"
+    r"no[!?. ]*|"
+    r"bye[!?. ]*|"
+    r"good(bye|night|morning|evening|afternoon)[!?. ]*"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# Categories that should always trigger RAG (factual / technical)
+_ALWAYS_RETRIEVE_CATEGORIES = frozenset({
+    "knowledge", "vm", "deployment", "devops", "planning", "stats",
+})
 
 # Pattern → (category, tools, confidence_boost)
 _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
@@ -49,7 +83,11 @@ _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
 
 
 class IntentClassifier:
-    """Rule-based intent classifier for routing user messages to tools."""
+    """Rule-based intent classifier for routing user messages to tools.
+
+    Phase 2: ``needs_retrieval()`` implements Self-RAG intent gating —
+    the decision whether to invoke the RAG pipeline before answering.
+    """
 
     def classify(self, message: str) -> Intent:
         scores: dict[str, float] = {}
@@ -78,18 +116,41 @@ class IntentClassifier:
             context_hints=hints,
         )
 
-    def get_system_prompt_hint(self, intent: Intent) -> Optional[str]:
-        """Generate a system prompt hint to guide tool selection."""
-        hints = {
-            "vm": "The user is asking about servers/VMs. Prefer vm_health_check or diagnose_vm for status, ssh_command for specific operations.",
-            "deployment": "The user is asking about deployments. Use the deploy tool for actions.",
-            "knowledge": "The user wants to search the knowledge base. Use search_knowledge.",
-            "code": "The user wants to work with code/files. Use write_file, apply_patch, or list_host_path.",
-            "document": "The user wants to generate a document. Use the appropriate generate_* tool.",
-            "image": "The user wants to generate an image. Use generate_image.",
-            "search": "The user wants web information. Use web_search or fetch_url.",
-            "planning": "The user wants a structured plan. Use create_plan.",
-            "stats": "The user wants platform statistics. Use get_platform_stats.",
-            "devops": "The user wants to run a local command. Use run_terminal_command.",
-        }
-        return hints.get(intent.category)
+    def needs_retrieval(self, message: str, intent: Optional[Intent] = None) -> bool:
+        """Decide whether the RAG pipeline should run before answering.
+
+        Self-RAG gating:
+          - Purely conversational messages → skip RAG (returns False).
+          - High-confidence factual/technical intents → always retrieve (True).
+          - Everything else → retrieve (safe default).
+
+        Args:
+            message: The latest user message (already stripped).
+            intent:  Pre-computed Intent (pass to avoid double-classifying).
+
+        Returns:
+            True  → run RAG before answering.
+            False → answer directly from LLM knowledge / tool results.
+        """
+        # Conversational short-circuits — never need KB context
+        if _CONVERSATIONAL_RE.match(message.strip()):
+            logger.debug("Self-RAG: skipping retrieval for conversational message %r", message[:40])
+            return False
+
+        if intent is None:
+            intent = self.classify(message)
+
+        # Technical / factual categories always benefit from KB context
+        if intent.category in _ALWAYS_RETRIEVE_CATEGORIES:
+            return True
+
+        # Very short messages with high-confidence non-factual intent → skip
+        if len(message.split()) <= 5 and intent.category == "general" and intent.confidence > 0.7:
+            return False
+
+        return True  # safe default
+
+
+# Module-level logger (imported after class so it can be used in method bodies)
+import logging  # noqa: E402
+logger = logging.getLogger(__name__)

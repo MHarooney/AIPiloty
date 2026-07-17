@@ -61,6 +61,13 @@ from .services.tools.testing.browser_tools import (
 )
 from .services.agent.testing_orchestrator import TestingOrchestrator
 from .services.rag import EmbeddingService, QdrantStore, RetrieverService, IngestService, TextChunker
+from .services.rag.corrective import CorrectiveRetriever
+from .services.rag.chunker_code import ASTChunker
+from .services.rag.raptor import RaptorBuilder
+from .services.llm.model_router import ModelRouter
+from .services.agent.self_evaluator import SelfEvaluator
+from .services.memory.episodic_store import EpisodicStore
+from .services.rag.graph import EntityExtractor, GraphStore, GraphRetriever
 from .services.image import create_image_service
 from .services.doc_studio import NotebookIngestService, DocStudioService
 from .core.logging import setup_logging
@@ -174,9 +181,84 @@ async def lifespan(app: FastAPI):
     # RAG services (Qdrant + Ollama embeddings) — graceful if Qdrant unavailable
     embedding_service = EmbeddingService()
     qdrant_store = QdrantStore()
-    retriever = RetrieverService(qdrant_store, embedding_service)
-    chunker = TextChunker()
-    ingest_service = IngestService(qdrant_store, embedding_service, chunker)
+    # Pass llm so Phase 1 enhancements (query rewriting, multi-query, HyDE) are active.
+    retriever = RetrieverService(qdrant_store, embedding_service, llm=llm)
+    # Phase 2: CRAG wrapper scores retrieval quality and advises web-search fallback.
+    corrective_retriever = CorrectiveRetriever(
+        retriever=retriever,
+        high_threshold=settings.rag_crag_high_threshold,
+        low_threshold=settings.rag_crag_low_threshold,
+    )
+    # Phase 2: self-evaluator scores final LLM answers; triggers one retry if poor.
+    self_evaluator = SelfEvaluator(llm=llm, threshold=settings.agent_self_eval_threshold)
+    # Phase 3: episodic memory — Qdrant-backed vector store for past episodes.
+    episodic_store = EpisodicStore(
+        qdrant_store=qdrant_store,
+        embeddings=embedding_service,
+        collection=settings.memory_episodic_collection,
+        max_episodes=settings.memory_episodic_max_episodes,
+    )
+    # Expose in app_state for the Memory API
+    app_state["episodic_store"] = episodic_store
+    app_state["agent_memory"] = None  # will be set below after agent_memory is created
+
+    # Phase 4: Graph RAG (LazyGraphRAG)
+    graph_store = GraphStore()
+    await graph_store.ensure_tables()
+    entity_extractor = EntityExtractor(
+        llm=llm if settings.rag_graph_llm_extraction else None
+    )
+    graph_retriever = GraphRetriever(
+        graph_store=graph_store,
+        entity_extractor=entity_extractor,
+        qdrant_store=qdrant_store,
+        embeddings=embedding_service,
+        hops=settings.rag_graph_hops,
+    )
+    # Re-create retriever with graph lane wired in
+    retriever = RetrieverService(
+        qdrant_store, embedding_service,
+        llm=llm,
+        graph_retriever=graph_retriever if settings.rag_graph_enabled else None,
+    )
+    # Update the corrective retriever to use the graph-aware retriever
+    corrective_retriever = CorrectiveRetriever(
+        retriever=retriever,
+        high_threshold=settings.rag_crag_high_threshold,
+        low_threshold=settings.rag_crag_low_threshold,
+    )
+    # Expose graph store in app_state for the KG explorer API
+    app_state["graph_store"] = graph_store
+    app_state["graph_retriever"] = graph_retriever
+
+    chunker = TextChunker()  # must be defined before Phase 5 uses it as fallback
+
+    # Phase 5: Advanced chunking + RAPTOR + Model Router
+    ast_chunker = ASTChunker(
+        max_chunk_chars=settings.kb_ast_chunk_max_chars,
+        fallback_chunker=chunker,
+    ) if settings.kb_ast_chunk_enabled else None
+    raptor_builder = RaptorBuilder(
+        llm=llm,
+        store=qdrant_store,
+        embeddings=embedding_service,
+        cluster_size=settings.rag_raptor_cluster_size,
+        max_levels=settings.rag_raptor_max_levels,
+    ) if settings.rag_raptor_enabled else None
+    model_router = ModelRouter()
+    app_state["model_router"] = model_router
+    logger.info(
+        "Phase 5: AST chunker=%s RAPTOR=%s ModelRouter=active",
+        settings.kb_ast_chunk_enabled, settings.rag_raptor_enabled,
+    )
+
+    ingest_service = IngestService(
+        qdrant_store, embedding_service, chunker,
+        graph_store=graph_store if settings.rag_graph_enabled else None,
+        entity_extractor=entity_extractor if settings.rag_graph_enabled else None,
+        ast_chunker=ast_chunker,
+        raptor_builder=raptor_builder,
+    )
 
     qdrant_ok = False
     try:
@@ -202,7 +284,7 @@ async def lifespan(app: FastAPI):
         ListHostPathTool(),
         SandboxedTerminalTool(guardrails) if settings.sandbox_enabled else TerminalCommandTool(guardrails),
         FetchUrlTool(),
-        KnowledgeSearchTool(retriever),
+        KnowledgeSearchTool(retriever, corrective_retriever=corrective_retriever),
         WriteFileTool(workspace_root),
         ApplyPatchTool(workspace_root),
         DiagnoseVMTool(ssh_executor, get_vm_func=get_vm_by_id, save_vm_func=save_vm_from_direct_ssh),
@@ -216,7 +298,15 @@ async def lifespan(app: FastAPI):
     agent_memory = AgentMemory(storage_path="data/agent_memory.json")
 
     # Agent orchestrator
-    orchestrator = AgentOrchestrator(llm, registry, guardrails, get_all_vms_func=get_all_vms, attachment_storage=attachment_storage, memory=agent_memory)
+    orchestrator = AgentOrchestrator(
+        llm, registry, guardrails,
+        get_all_vms_func=get_all_vms,
+        attachment_storage=attachment_storage,
+        memory=agent_memory,
+        evaluator=self_evaluator,     # Phase 2: self-correction
+        episodic_store=episodic_store, # Phase 3: episodic memory
+    )
+    app_state["agent_memory"] = agent_memory
 
     # Testing orchestrator — dedicated registry with testing-only tools
     testing_registry = ToolRegistry()
@@ -388,6 +478,7 @@ def create_app() -> FastAPI:
     from .api.v1.testing import router as testing_router
     from .api.v1.doc_studio import router as doc_studio_router
     from .api.v1.system_manager import router as system_manager_router
+    from .api.v1.memory import router as memory_router  # Phase 3
 
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
@@ -397,6 +488,7 @@ def create_app() -> FastAPI:
     app.include_router(files_router, prefix="/api/v1")
     app.include_router(knowledge_router, prefix="/api/v1")
     app.include_router(rag_router, prefix="/api/v1")
+    app.include_router(memory_router, prefix="/api/v1")  # Phase 3
     app.include_router(database_router, prefix="/api/v1")
     app.include_router(workspace_router, prefix="/api/v1")
     app.include_router(images_router, prefix="/api/v1")

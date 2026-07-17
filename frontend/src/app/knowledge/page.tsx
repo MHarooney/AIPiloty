@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import AppShell from "@/components/app-shell";
+import KGExplorer from "@/components/kg-explorer";
 import { getKBHealth, getKBDocuments, searchKB, deleteKBDocument, getRAGHealth, ragIngest } from "@/lib/api";
 import {
   BookOpen, Search, Trash2, Loader2, AlertTriangle,
@@ -184,6 +185,9 @@ export default function KnowledgePage() {
                 : `DeployPilot KB bridge — ${health.error || "configure DEPLOYPILOT_KB_URL in backend .env (optional)"}`}
             </div>
           )}
+
+          {/* Phase 4: Knowledge Graph Explorer */}
+          <KGExplorer />
 
           {/* Search */}
           {available && (

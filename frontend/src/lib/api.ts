@@ -502,6 +502,98 @@ export async function ragDeleteSource(sourcePath: string) {
   return handleRes<any>(res);
 }
 
+// ── Phase 4: Graph RAG ───────────────────────────────────────────────
+export interface KGEntity {
+  id: string;
+  name: string;
+  type: string;
+  chunk_count: number;
+}
+export interface KGNeighbor {
+  neighbor_id: string;
+  neighbor_name: string;
+  neighbor_type: string;
+  relation: string;
+  weight: number;
+}
+export interface GraphStats {
+  nodes: number;
+  edges: number;
+  chunk_entity_links: number;
+}
+export async function getGraphStats(): Promise<GraphStats> {
+  const res = await fetch(`${API_BASE}/rag/graph/stats`, { headers: headers() });
+  return handleRes<GraphStats>(res);
+}
+export async function getGraphEntities(limit = 50, entityType?: string): Promise<{ entities: KGEntity[] }> {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (entityType) p.set("entity_type", entityType);
+  const res = await fetch(`${API_BASE}/rag/graph/entities?${p}`, { headers: headers() });
+  return handleRes<{ entities: KGEntity[] }>(res);
+}
+export async function getEntityNeighbors(nodeId: string, limit = 20): Promise<{ neighbors: KGNeighbor[] }> {
+  const res = await fetch(`${API_BASE}/rag/graph/entities/${encodeURIComponent(nodeId)}/neighbors?limit=${limit}`, { headers: headers() });
+  return handleRes<{ neighbors: KGNeighbor[] }>(res);
+}
+
+// ── Memory (Phase 3) ─────────────────────────────────────────────────
+export interface MemoryEntry {
+  key: string;
+  value: any;
+  category: string;
+  importance: number;
+  created_at: string;
+  access_count: number;
+  last_accessed: string | null;
+}
+export interface Episode {
+  id: string;
+  summary: string;
+  category: string;
+  session_id: string;
+  importance: number;
+  created_at: string;
+  score: number;
+}
+export interface MemoryStats {
+  agent_memory: { total_entries: number; categories: string[] };
+  episodic_memory: { total_episodes: number; available: boolean; collection: string };
+}
+export async function getMemoryEntries(category?: string): Promise<MemoryEntry[]> {
+  const p = category ? `?category=${encodeURIComponent(category)}` : "";
+  const res = await fetch(`${API_BASE}/memory/entries${p}`, { headers: headers() });
+  return handleRes<MemoryEntry[]>(res);
+}
+export async function createMemoryEntry(key: string, value: string, category = "general", importance = 0.5): Promise<MemoryEntry> {
+  const res = await fetch(`${API_BASE}/memory/entries`, { method: "POST", headers: headers(), body: JSON.stringify({ key, value, category, importance }) });
+  return handleRes<MemoryEntry>(res);
+}
+export async function deleteMemoryEntry(key: string): Promise<void> {
+  await fetch(`${API_BASE}/memory/entries/${encodeURIComponent(key)}`, { method: "DELETE", headers: headers() });
+}
+export async function clearMemoryEntries(category?: string): Promise<void> {
+  const p = category ? `?category=${encodeURIComponent(category)}` : "";
+  await fetch(`${API_BASE}/memory/entries${p}`, { method: "DELETE", headers: headers() });
+}
+export async function getMemoryStats(): Promise<MemoryStats> {
+  const res = await fetch(`${API_BASE}/memory/stats`, { headers: headers() });
+  return handleRes<MemoryStats>(res);
+}
+export async function listEpisodes(limit = 50, category?: string): Promise<Episode[]> {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (category) p.set("category", category);
+  const res = await fetch(`${API_BASE}/memory/episodic?${p}`, { headers: headers() });
+  return handleRes<Episode[]>(res);
+}
+export async function searchEpisodes(q: string, topK = 5): Promise<Episode[]> {
+  const p = new URLSearchParams({ q, top_k: String(topK) });
+  const res = await fetch(`${API_BASE}/memory/episodic/search?${p}`, { headers: headers() });
+  return handleRes<Episode[]>(res);
+}
+export async function deleteEpisode(id: string): Promise<void> {
+  await fetch(`${API_BASE}/memory/episodic/${encodeURIComponent(id)}`, { method: "DELETE", headers: headers() });
+}
+
 // ── Git ─────────────────────────────────────────────
 export async function gitStatus() {
   const res = await fetch(`${API_BASE}/git/status`, { headers: headers() });
