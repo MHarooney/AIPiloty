@@ -557,18 +557,10 @@ class AgentOrchestrator:
             "what's up", "whats up",
         }
         _clean_user_msg = _latest_user_msg.strip().lower().rstrip("!?.,")
-        _is_conversational = (
-            _clean_user_msg in _GREETINGS
-            or (len(_clean_user_msg.split()) <= 3 and not any(
-                kw in _clean_user_msg for kw in (
-                    "model", "run", "check", "status", "deploy", "vm", "ssh",
-                    "disk", "install", "ollama", "docker", "server", "file",
-                    "code", "generate", "create", "list", "show", "get",
-                    "what", "how", "why", "when", "where", "which",
-                )
-            ))
-        )
-        if _is_conversational:
+        # Only exact greetings/pleasantries short-circuit. Do NOT treat every
+        # short phrase (e.g. "who are you", "are you robot") as conversational —
+        # those must reach the LLM for a real answer.
+        if _clean_user_msg in _GREETINGS:
             _greeting_replies = {
                 "hello": "Hello! How can I help you today?",
                 "hi": "Hi there! What can I do for you?",
@@ -584,12 +576,36 @@ class AgentOrchestrator:
                 "good night": "Good night! Let me know if you need anything.",
                 "thanks": "You're welcome! Let me know if there's anything else I can help with.",
                 "thank you": "You're welcome! Feel free to ask if you need anything else.",
+                "thanks!": "You're welcome! Let me know if there's anything else I can help with.",
+                "thank you!": "You're welcome! Feel free to ask if you need anything else.",
+                "thx": "You're welcome!",
+                "ty": "You're welcome!",
                 "bye": "Goodbye! Feel free to come back anytime.",
                 "goodbye": "Goodbye! Have a great day!",
+                "see you": "See you! Come back anytime.",
+                "later": "Later! I'm here when you need me.",
+                "ok": "Okay! What would you like to do next?",
+                "okay": "Okay! What would you like to do next?",
+                "k": "Okay! What would you like to do next?",
+                "cool": "Cool! What can I help with?",
+                "great": "Great! What would you like to do next?",
+                "nice": "Nice! What can I help with?",
+                "awesome": "Awesome! What would you like to do?",
+                "got it": "Got it! What would you like to do next?",
+                "understood": "Understood! What would you like to do next?",
+                "sounds good": "Sounds good! What should we do next?",
+                "sure": "Sure! What do you need?",
+                "alright": "Alright! What can I help with?",
+                "fine": "Okay! What would you like to do?",
+                "yep": "Okay! What can I help with?",
+                "yes": "Okay! What can I help with?",
+                "no": "No problem. What else can I help with?",
+                "what's up": "Not much! What can I help you with?",
+                "whats up": "Not much! What can I help you with?",
             }
             _reply = _greeting_replies.get(
                 _clean_user_msg,
-                "Got it! Let me know what you'd like to do.",
+                "Hello! How can I help you today?",
             )
             yield SSEEvent("token", {"token": _reply, "done": True})
             return
