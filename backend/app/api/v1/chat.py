@@ -148,17 +148,22 @@ async def chat_stream(
 
         try:
             # Phase 5: model routing — auto-select fast/smart/coder model
+            # Use lazy import inside function to avoid circular import at module level
             model_override = req.model
             if not model_override:
-                router = app_state.get("model_router")
-                if router is not None:
-                    last_user_msg = next(
-                        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
-                        "",
-                    )
-                    decision = router.route(str(last_user_msg))
-                    model_override = decision.model
-                    logger.debug("ModelRouter: complexity=%s → model=%s", decision.complexity, decision.model)
+                try:
+                    from ...main import app_state as _app_state
+                    _model_router = _app_state.get("model_router")
+                    if _model_router is not None:
+                        _last_msg = next(
+                            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                            "",
+                        )
+                        _decision = _model_router.route(str(_last_msg))
+                        model_override = _decision.model
+                        logger.debug("ModelRouter: %s → %s", _decision.complexity, _decision.model)
+                except Exception:
+                    pass  # graceful: fall back to no model override
 
             async for event in orchestrator.run(
                 messages,

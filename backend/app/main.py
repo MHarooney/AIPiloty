@@ -235,9 +235,11 @@ async def lifespan(app: FastAPI):
     chunker = TextChunker()  # must be defined before Phase 5 uses it as fallback
 
     # Phase 5: Advanced chunking + RAPTOR + Model Router
+    # Create a fresh TextChunker for AST fallback (avoids ordering dependency with ingest_service)
+    _fallback_chunker = TextChunker()
     ast_chunker = ASTChunker(
         max_chunk_chars=settings.kb_ast_chunk_max_chars,
-        fallback_chunker=chunker,
+        fallback_chunker=_fallback_chunker,
     ) if settings.kb_ast_chunk_enabled else None
     raptor_builder = RaptorBuilder(
         llm=llm,

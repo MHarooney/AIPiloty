@@ -4,12 +4,18 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import AppShell from "@/components/app-shell";
 import FileTree, { type TreeNode } from "@/components/file-tree";
+import IDECommandPalette from "@/components/ide-command-palette";
 import { getWorkspaceTree, getWorkspaceFile, saveWorkspaceFile, searchWorkspace, listProjects, createWorkspaceFile, createWorkspaceDir, renameWorkspacePath, deleteWorkspacePath, type Project } from "@/lib/api";
 import ProjectPickerModal from "@/components/project-picker-modal";
 import MCPSettings from "@/components/mcp-settings";
 import MCPMarketplace from "@/components/mcp-marketplace";
 import IDETerminal from "@/components/ide-terminal";
-import { Code, Loader2, X, FileCode, Save, Circle, Search, GitBranch, Sparkles, FolderPlus, Settings2, ChevronDown, Folder, Terminal, FilePlus, FolderPlus as FolderPlusIcon, Package, Pencil, Trash2, MoreVertical, Plus } from "lucide-react";
+import {
+  Code, Loader2, X, FileCode, Save, Circle, Search, GitBranch,
+  Sparkles, FolderPlus, Settings2, ChevronDown, Folder, Terminal,
+  FilePlus, FolderPlus as FolderPlusIcon, Package, Plus,
+  Files, LayoutPanelLeft,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor-store";
 import { useRouter } from "next/navigation";
@@ -38,13 +44,6 @@ interface SearchResult {
   content: string;
 }
 
-// ── File context menu ─────────────────────────────────────────────────────
-interface ContextMenu {
-  x: number;
-  y: number;
-  node: TreeNode;
-}
-
 export default function CodeEditorPage() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,24 +55,26 @@ export default function CodeEditorPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"files" | "git">("files");
-  // IDE additions
+  const [sidebarTab, setSidebarTab] = useState<"files" | "search" | "git">("files");
+  const [activityTab, setActivityTab] = useState<"files" | "search" | "git" | "mcp">("files");
   const [showTerminal, setShowTerminal] = useState(false);
   const [showMCPMarketplace, setShowMCPMarketplace] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
-  const [renameNode, setRenameNode] = useState<{ node: TreeNode; value: string } | null>(null);
   const [newItemTarget, setNewItemTarget] = useState<{ dir: string; type: "file" | "dir" } | null>(null);
   const [newItemName, setNewItemName] = useState("");
   const [statusBarInfo, setStatusBarInfo] = useState({ line: 1, col: 1, language: "plaintext" });
   const [showAIChat, setShowAIChat] = useState(false);
   const [selectedText, setSelectedText] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(256);
-  const [aiChatWidth, setAiChatWidth] = useState(320);
+  const [aiChatWidth, setAiChatWidth] = useState(360);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [showMCPSettings, setShowMCPSettings] = useState(false);
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  // Command palette
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteMode, setPaletteMode] = useState<"ai" | "files" | "cmd">("ai");
+
   const sidebarDragRef = useRef({ active: false, startX: 0, startWidth: 0 });
   const aiChatDragRef = useRef({ active: false, startX: 0, startWidth: 0 });
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -153,25 +154,24 @@ export default function CodeEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Global Cmd+S / Ctrl+S handler + Cmd+Shift+F / Ctrl+Shift+F search
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key === "s") { e.preventDefault(); handleSave(); }
+      if (meta && e.shiftKey && e.key === "f") {
         e.preventDefault();
-        handleSave();
+        setShowSearch((prev) => { if (!prev) setTimeout(() => searchInputRef.current?.focus(), 50); return !prev; });
       }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "f") {
-        e.preventDefault();
-        setShowSearch((prev) => {
-          if (!prev) setTimeout(() => searchInputRef.current?.focus(), 50);
-          return !prev;
-        });
-      }
-      // Cmd/Ctrl+I — toggle AI chat panel
-      if ((e.metaKey || e.ctrlKey) && e.key === "i" && !e.shiftKey) {
-        e.preventDefault();
-        setShowAIChat((prev) => !prev);
-      }
+      if (meta && e.key === "i" && !e.shiftKey) { e.preventDefault(); setShowAIChat(p => !p); }
+      // Cmd+K — AI command palette
+      if (meta && e.key === "k") { e.preventDefault(); setPaletteMode("ai"); setPaletteOpen(true); }
+      // Cmd+P — quick open file
+      if (meta && e.key === "p" && !e.shiftKey) { e.preventDefault(); setPaletteMode("files"); setPaletteOpen(true); }
+      // Cmd+Shift+P — commands
+      if (meta && e.shiftKey && e.key === "p") { e.preventDefault(); setPaletteMode("cmd"); setPaletteOpen(true); }
+      // Ctrl+` — toggle terminal
+      if (e.ctrlKey && e.key === "`") { e.preventDefault(); setShowTerminal(p => !p); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -582,7 +582,33 @@ export default function CodeEditorPage() {
             ) : tree.length === 0 ? (
               <p className="text-xs text-gray-600 p-4">No files found</p>
             ) : (
-              <FileTree tree={tree} selectedPath={activeTab} onSelect={openFile} />
+              <FileTree
+                tree={tree}
+                selectedPath={activeTab}
+                onSelect={openFile}
+                onNewFile={(dir) => setNewItemTarget({ dir, type: "file" })}
+                onNewFolder={(dir) => setNewItemTarget({ dir, type: "dir" })}
+                onRename={async (oldPath, newName) => {
+                  const parts = oldPath.split("/");
+                  parts[parts.length - 1] = newName;
+                  const newPath = parts.join("/");
+                  try {
+                    await renameWorkspacePath(oldPath, newPath, activeProjectId ?? undefined);
+                    toast.success("Renamed");
+                    getWorkspaceTree(undefined, undefined, activeProjectId ?? undefined).then(d => setTree(d.tree || []));
+                  } catch (err: any) { toast.error(err.message); }
+                }}
+                onDelete={async (path, isDir) => {
+                  if (!confirm(`Delete ${isDir ? "folder" : "file"} "${path.split("/").pop()}"?`)) return;
+                  try {
+                    await deleteWorkspacePath(path, activeProjectId ?? undefined);
+                    toast.success("Deleted");
+                    setTabs(prev => prev.filter(t => !t.path.startsWith(path)));
+                    if (activeTab?.startsWith(path)) setActiveTab(null);
+                    getWorkspaceTree(undefined, undefined, activeProjectId ?? undefined).then(d => setTree(d.tree || []));
+                  } catch (err: any) { toast.error(err.message); }
+                }}
+              />
             )}
           </div>
             </>
@@ -603,7 +629,10 @@ export default function CodeEditorPage() {
           }}
         />
 
-        {/* Editor area */}
+        {/* Editor area — vertical column wrapping: (editor+AI) + terminal + status bar */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* Horizontal: editor content + AI chat panel */}
         <div className="flex-1 flex overflow-hidden min-w-0">
           <div className="flex-1 flex flex-col min-w-0">
           {/* Tab bar */}
@@ -645,18 +674,28 @@ export default function CodeEditorPage() {
                   Save
                 </button>
               )}
+              {/* Cmd+K AI command palette trigger */}
+              <button
+                onClick={() => { setPaletteMode("ai"); setPaletteOpen(true); }}
+                className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-zinc-500 hover:text-purple-400 hover:bg-purple-500/5 transition-all border border-transparent hover:border-purple-500/20"
+                title="AI Command Palette (⌘K)"
+              >
+                <Sparkles size={11} />
+                <span className="hidden sm:inline">AI</span>
+                <kbd className="text-zinc-700 text-[9px] ml-0.5">⌘K</kbd>
+              </button>
               {/* AI Chat toggle button */}
               <button
                 onClick={() => setShowAIChat((p) => !p)}
-                className={`ml-auto mr-2 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                className={`mr-2 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                   showAIChat
                     ? "bg-indigo-600/20 border border-indigo-500/40 text-indigo-300"
                     : "text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/5"
                 }`}
-                title="Toggle AI Assistant (⌘I)"
+                title="Toggle AI Chat (⌘I)"
               >
                 <Sparkles size={12} />
-                AI
+                Chat
               </button>
             </div>
           )}
@@ -727,19 +766,40 @@ export default function CodeEditorPage() {
               />
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-600 text-sm gap-4">
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-600 text-sm gap-3">
               <div className="text-center">
-                <Code size={40} className="mx-auto mb-3 opacity-30" />
-                <p>Select a file to view &amp; edit</p>
-                <p className="text-xs text-gray-700 mt-1">⌘S to save</p>
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4">
+                  <Code size={28} className="text-indigo-400/60" />
+                </div>
+                <p className="text-gray-400 font-medium">No file open</p>
+                <p className="text-xs text-gray-600 mt-1">Select a file from the explorer or use quick open</p>
               </div>
-              <button
-                onClick={() => setShowAIChat((p) => !p)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-500/20 bg-indigo-500/5 text-indigo-400 hover:bg-indigo-500/10 hover:border-indigo-500/40 transition-all text-xs"
-              >
-                <Sparkles size={13} />
-                Open AI Assistant  <span className="text-gray-700 ml-1">⌘I</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                <button
+                  onClick={() => { setPaletteMode("files"); setPaletteOpen(true); }}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/50 bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-all text-xs"
+                >
+                  <Search size={12} />
+                  Quick Open
+                  <kbd className="text-zinc-600 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-700 text-[9px] ml-1">⌘P</kbd>
+                </button>
+                <button
+                  onClick={() => { setPaletteMode("ai"); setPaletteOpen(true); }}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-indigo-500/20 bg-indigo-500/5 text-indigo-400 hover:bg-indigo-500/10 transition-all text-xs"
+                >
+                  <Sparkles size={12} />
+                  AI Command
+                  <kbd className="text-indigo-700 bg-indigo-900/40 px-1.5 py-0.5 rounded border border-indigo-700/30 text-[9px] ml-1">⌘K</kbd>
+                </button>
+                <button
+                  onClick={() => setShowAIChat(p => !p)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/50 bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-all text-xs"
+                >
+                  <Sparkles size={12} />
+                  AI Chat
+                  <kbd className="text-zinc-600 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-700 text-[9px] ml-1">⌘I</kbd>
+                </button>
+              </div>
             </div>
           )}          </div>
 
@@ -772,6 +832,7 @@ export default function CodeEditorPage() {
             </div>
             </>
           )}        </div>
+        {/* End horizontal editor + AI area — closed above */}
 
         {/* ── Integrated Terminal Panel ──────────────────────────────── */}
         {showTerminal && (
@@ -808,6 +869,8 @@ export default function CodeEditorPage() {
             </button>
           </div>
         </div>
+        {/* End outer vertical editor column */}
+        </div>
       </div>
       {showProjectPicker && (
         <ProjectPickerModal
@@ -830,6 +893,55 @@ export default function CodeEditorPage() {
           onInstalled={() => toast.success("MCP server installed — reload agent to use new tools")}
         />
       )}
+
+      {/* ── Cursor-style Command Palette ─────────────────────────────── */}
+      <IDECommandPalette
+        isOpen={paletteOpen}
+        mode={paletteMode}
+        onClose={() => setPaletteOpen(false)}
+        fileTree={tree}
+        currentFile={activeTab}
+        onOpenFile={(path) => { openFile(path); setPaletteOpen(false); }}
+        onAIAction={(prompt) => {
+          // Inject into EditorAIChat
+          setShowAIChat(true);
+          // Give the panel a moment to mount then trigger the action
+          setTimeout(() => {
+            const event = new CustomEvent("aipiloty:ai-action", { detail: { prompt } });
+            window.dispatchEvent(event);
+          }, 100);
+        }}
+        extraCommands={[
+          {
+            id: "ai-chat", label: "Toggle AI Chat", icon: Sparkles, category: "View",
+            action: () => setShowAIChat(p => !p), shortcut: "⌘I",
+          },
+          {
+            id: "terminal", label: "Toggle Terminal", icon: Terminal, category: "View",
+            action: () => setShowTerminal(p => !p), shortcut: "Ctrl+`",
+          },
+          {
+            id: "mcp-marketplace", label: "Open MCP Marketplace", icon: Package, category: "Settings",
+            action: () => setShowMCPMarketplace(true),
+          },
+          {
+            id: "mcp-settings", label: "Manage MCP Servers", icon: Settings2, category: "Settings",
+            action: () => setShowMCPSettings(true),
+          },
+          {
+            id: "new-file", label: "New File", icon: FilePlus, category: "File",
+            action: () => setNewItemTarget({ dir: ".", type: "file" }),
+          },
+          {
+            id: "new-folder", label: "New Folder", icon: FolderPlusIcon, category: "File",
+            action: () => setNewItemTarget({ dir: ".", type: "dir" }),
+          },
+          {
+            id: "open-folder", label: "Open Project Folder", icon: Folder, category: "File",
+            action: () => setShowProjectPicker(true),
+          },
+        ]}
+      />
     </AppShell>
   );
 }
