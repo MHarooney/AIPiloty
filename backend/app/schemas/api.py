@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     session_key: Optional[str] = None
     auto_approve: bool = False
     model: Optional[str] = None  # Override default model for this request
+    mode: Optional[str] = "auto"  # Phase B: ask | agent | auto
 
 
 class ToolCallOut(BaseModel):

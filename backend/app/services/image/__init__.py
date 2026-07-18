@@ -34,6 +34,10 @@ class ImageResult:
     generation_time_ms: int = 0
     file_size: int = 0
     error: str = ""
+    model: str = ""
+    provider: str = ""
+    # When set, caller should ask the user (model choice / missing API key)
+    needs_input: Optional[Dict[str, Any]] = None
 
 
 class ImageProvider(abc.ABC):
@@ -238,6 +242,201 @@ class SDXLTurboProvider(ImageProvider):
         return await asyncio.get_event_loop().run_in_executor(None, _run)
 
 
+
+class OpenAIImagesProvider(ImageProvider):
+    """OpenAI Images API (DALL·E 3) — ChatGPT-class quality via cloud API.
+
+    Requires OPENAI_API_KEY. Uses response_format=b64_json so no second download hop.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "dall-e-3",
+        quality: str = "hd",
+        base_url: str = "https://api.openai.com/v1",
+    ) -> None:
+        self._api_key = api_key.strip()
+        self._model = model
+        self._quality = quality if model.startswith("dall-e-3") else "standard"
+        self._base_url = base_url.rstrip("/")
+
+    @property
+    def name(self) -> str:
+        return f"openai:{self._model}"
+
+    async def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    @staticmethod
+    def _pick_size(width: int, height: int) -> str:
+        ratio = width / max(height, 1)
+        if ratio >= 1.4:
+            return "1792x1024"
+        if ratio <= 0.75:
+            return "1024x1792"
+        return "1024x1024"
+
+    async def generate(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        seed: Optional[int] = None,
+    ) -> bytes:
+        full_prompt = prompt.strip()
+        if negative_prompt:
+            full_prompt = f"{full_prompt}. Avoid: {negative_prompt[:200]}"
+        size = self._pick_size(width, height)
+        # Newer Images API rejects response_format; prefer URL then download.
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "prompt": full_prompt[:4000],
+            "n": 1,
+            "size": size,
+        }
+        if self._model.startswith("dall-e-3"):
+            payload["quality"] = self._quality
+        # Legacy dall-e-2 still accepts b64; try only for that model
+        if self._model.startswith("dall-e-2"):
+            payload["response_format"] = "b64_json"
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                f"{self._base_url}/images/generations",
+                headers=headers,
+                json=payload,
+            )
+            # Some API keys only expose gpt-image-*; soft-fallback from classic DALL·E ids
+            if (
+                resp.status_code >= 400
+                and self._model.startswith("dall-e")
+                and "does not exist" in (resp.text or "").lower()
+            ):
+                logger.warning(
+                    "OpenAI model %s unavailable for this key — falling back to gpt-image-1",
+                    self._model,
+                )
+                self._model = "gpt-image-1"
+                payload.pop("quality", None)
+                payload["model"] = "gpt-image-1"
+                resp = await client.post(
+                    f"{self._base_url}/images/generations",
+                    headers=headers,
+                    json=payload,
+                )
+            if resp.status_code >= 400:
+                detail = resp.text[:500]
+                raise RuntimeError(f"OpenAI Images API {resp.status_code}: {detail}")
+            data = resp.json()
+            items = data.get("data") or []
+            if not items:
+                raise RuntimeError("OpenAI Images API returned no image data")
+            b64 = items[0].get("b64_json")
+            if b64:
+                return base64.b64decode(b64)
+            url = items[0].get("url")
+            if not url:
+                raise RuntimeError("OpenAI Images API: missing b64_json and url")
+            img_resp = await client.get(url)
+            img_resp.raise_for_status()
+            return img_resp.content
+
+
+class GeminiImagesProvider(ImageProvider):
+    """Google Gemini native image models (Nano Banana family) via generateContent."""
+
+    # Prefer newer ids; keep retired ids as remap targets for old Settings defaults.
+    _MODEL_ALIASES = {
+        "gemini-2.0-flash-preview-image-generation": "gemini-2.5-flash-image",
+        "imagen-3.0-generate-002": "gemini-3.1-flash-image",
+        "imagen-3": "gemini-3.1-flash-image",
+        "nano-banana": "gemini-2.5-flash-image",
+    }
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-2.5-flash-image",
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta",
+    ) -> None:
+        self._api_key = (api_key or "").strip()
+        raw = (model or "gemini-2.5-flash-image").strip()
+        self._model = self._MODEL_ALIASES.get(raw, raw)
+        self._base_url = base_url.rstrip("/")
+
+    @property
+    def name(self) -> str:
+        return f"gemini:{self._model}"
+
+    async def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    async def generate(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        seed: Optional[int] = None,
+    ) -> bytes:
+        full_prompt = prompt.strip()
+        if negative_prompt:
+            full_prompt = f"{full_prompt}. Avoid: {negative_prompt[:200]}"
+
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self._api_key}
+        # Try requested model, then known-good Nano Banana fallbacks.
+        candidates = [self._model]
+        for alt in ("gemini-2.5-flash-image", "gemini-3.1-flash-image"):
+            if alt not in candidates:
+                candidates.append(alt)
+
+        last_err = "Gemini Image API failed"
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            for mid in candidates:
+                url = f"{self._base_url}/models/{mid}:generateContent"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": full_prompt[:4000]}]}],
+                    "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+                }
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    last_err = f"Gemini Image API {resp.status_code}: {resp.text[:500]}"
+                    # Remap retired / missing models
+                    if resp.status_code in (404, 400) and mid != candidates[-1]:
+                        logger.warning("Gemini model %s failed (%s); trying fallback", mid, resp.status_code)
+                        continue
+                    raise RuntimeError(last_err)
+                data = resp.json()
+                for cand in data.get("candidates") or []:
+                    for part in (cand.get("content") or {}).get("parts") or []:
+                        inline = part.get("inlineData") or part.get("inline_data") or {}
+                        b64 = inline.get("data")
+                        if b64:
+                            self._model = mid
+                            return base64.b64decode(b64)
+                last_err = f"Gemini model {mid} returned no image parts"
+                if mid != candidates[-1]:
+                    continue
+                raise RuntimeError(last_err)
+        raise RuntimeError(last_err)
+
+
+def build_provider_from_secret(provider: str, api_key: str, model: str) -> ImageProvider:
+    if provider == "openai":
+        return OpenAIImagesProvider(api_key=api_key, model=model)
+    if provider == "gemini":
+        return GeminiImagesProvider(api_key=api_key, model=model)
+    raise ValueError(f"Unsupported image provider: {provider}")
+
+
 class ExternalAPIProvider(ImageProvider):
     """Calls an external image generation API (Replicate, Stability, ComfyUI, etc.)."""
 
@@ -292,7 +491,12 @@ class ExternalAPIProvider(ImageProvider):
 
 
 class ImageGenerationService:
-    """Orchestrates image generation, storage, and history."""
+    """Orchestrates image generation, storage, and history.
+
+    Cloud providers (OpenAI / Gemini) are resolved per-request from encrypted
+    DB secrets — not from .env. The boot-time ``_provider`` is only a fallback
+    (external URL / placeholder / optional local SDXL).
+    """
 
     def __init__(self, workspace_root: str, provider: Optional[ImageProvider] = None) -> None:
         self._workspace = Path(workspace_root).resolve()
@@ -305,6 +509,13 @@ class ImageGenerationService:
         return self._provider.name if self._provider else "none"
 
     async def is_configured(self) -> bool:
+        try:
+            from ..provider_secrets import configured_provider_ids
+
+            if await configured_provider_ids():
+                return True
+        except Exception as e:
+            logger.debug("provider secret probe failed: %s", e)
         if not self._provider:
             return False
         return await self._provider.is_available()
@@ -318,25 +529,77 @@ class ImageGenerationService:
         steps: int = 20,
         seed: Optional[int] = None,
         model: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> ImageResult:
-        if not self._provider:
-            return ImageResult(success=False, error="Image generation not configured. No provider available.")
-
-        # Clamp dimensions
         width = max(64, min(int(width), 2048))
         height = max(64, min(int(height), 2048))
         steps = max(1, min(int(steps), 100))
         seed = seed or random.randint(0, 2**31)
-
-        # Safety: append negative prompt
         full_negative = f"{negative_prompt}, {SAFETY_NEGATIVE}" if negative_prompt else SAFETY_NEGATIVE
+
+        active_provider = self._provider
+        used_model = model or ""
+        used_provider_name = self.provider_name
+
+        # Prefer encrypted DB secrets (Settings → Image Providers)
+        try:
+            from ..provider_secrets import resolve_image_backend
+
+            backend, needs = await resolve_image_backend(model=model, provider=provider)
+            if needs:
+                status = needs.get("status")
+                # Allow non-placeholder boot fallback (e.g. external Comfy URL)
+                if (
+                    status == "needs_api_key"
+                    and self._provider
+                    and not isinstance(self._provider, PlaceholderProvider)
+                ):
+                    active_provider = self._provider
+                    used_provider_name = self.provider_name
+                else:
+                    return ImageResult(
+                        success=False,
+                        error=needs.get("message") or "Image provider not ready",
+                        needs_input=needs,
+                    )
+            elif backend:
+                active_provider = build_provider_from_secret(
+                    backend.provider, backend.api_key, backend.model
+                )
+                used_model = backend.model
+                used_provider_name = active_provider.name
+        except Exception as e:
+            logger.warning("DB secret resolve failed, using boot provider: %s", e)
+
+        if not active_provider:
+            return ImageResult(
+                success=False,
+                error=(
+                    "No image provider ready. Add an OpenAI or Gemini API key in "
+                    "Settings → Image Providers."
+                ),
+                needs_input={
+                    "status": "needs_api_key",
+                    "message": "Add an image API key in Settings → Image Providers.",
+                    "options": [],
+                },
+            )
+
+        # Avoid burning cloud quota on accidental placeholder when secrets exist
+        if (
+            isinstance(active_provider, PlaceholderProvider)
+            and not model
+            and not provider
+        ):
+            # Still allow placeholder only if explicitly no secrets (already handled)
+            pass
 
         fname = f"img_{uuid.uuid4().hex[:12]}.png"
         out_path = self._images_dir / fname
 
         start = time.monotonic()
         try:
-            img_bytes = await self._provider.generate(
+            img_bytes = await active_provider.generate(
                 prompt=prompt,
                 negative_prompt=full_negative,
                 width=width,
@@ -345,11 +608,65 @@ class ImageGenerationService:
                 seed=seed,
             )
         except Exception as e:
+            err_text = str(e)
             logger.error("Image generation failed: %s", e)
-            return ImageResult(success=False, error=str(e))
+            # Soft-fallback: Gemini quota / missing model → OpenAI if configured
+            if (
+                used_provider_name.startswith("gemini")
+                and ("429" in err_text or "404" in err_text or "quota" in err_text.lower())
+            ):
+                try:
+                    from ..provider_secrets import resolve_image_backend
+
+                    openai_backend, _ = await resolve_image_backend(
+                        model="gpt-image-1", provider="openai"
+                    )
+                    if openai_backend:
+                        logger.warning(
+                            "Gemini failed (%s); falling back to OpenAI gpt-image-1",
+                            err_text[:120],
+                        )
+                        active_provider = build_provider_from_secret(
+                            openai_backend.provider,
+                            openai_backend.api_key,
+                            openai_backend.model,
+                        )
+                        used_model = openai_backend.model
+                        used_provider_name = active_provider.name
+                        img_bytes = await active_provider.generate(
+                            prompt=prompt,
+                            negative_prompt=full_negative,
+                            width=width,
+                            height=height,
+                            steps=steps,
+                            seed=seed,
+                        )
+                    else:
+                        return ImageResult(
+                            success=False,
+                            error=(
+                                f"{err_text}\n\nGemini image quota/model unavailable. "
+                                "Add billing in Google AI Studio, or use an OpenAI model."
+                            ),
+                            model=used_model,
+                            provider=used_provider_name,
+                        )
+                except Exception as fallback_err:
+                    return ImageResult(
+                        success=False,
+                        error=f"{err_text} | OpenAI fallback also failed: {fallback_err}",
+                        model=used_model,
+                        provider=used_provider_name,
+                    )
+            else:
+                return ImageResult(
+                    success=False,
+                    error=err_text,
+                    model=used_model,
+                    provider=used_provider_name,
+                )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
-
         out_path.write_bytes(img_bytes)
         rel_path = str(out_path.relative_to(self._workspace))
 
@@ -362,6 +679,8 @@ class ImageGenerationService:
             height=height,
             generation_time_ms=elapsed_ms,
             file_size=len(img_bytes),
+            model=used_model,
+            provider=used_provider_name,
         )
 
 
@@ -385,36 +704,39 @@ def create_image_service(
     image_gen_api_url: Optional[str] = None,
     image_provider: Optional[str] = None,
     sdxl_model_id: Optional[str] = None,
+    openai_api_key: Optional[str] = None,
+    openai_image_model: Optional[str] = None,
+    openai_image_quality: Optional[str] = None,
 ) -> ImageGenerationService:
-    """Factory to create the image service with the best available provider.
+    """Boot-time factory. Cloud keys come from Settings UI (DB), not .env.
 
-    Provider selection priority:
-    1. ``image_provider="sdxl_turbo"`` → local SDXL Turbo (requires diffusers+torch)
-    2. ``image_gen_api_url`` set → external API
-    3. Fallback → Pillow placeholder
+    Boot fallback order:
+    1. Explicit external IMAGE_GEN_API_URL
+    2. Optional local sdxl_turbo if requested
+    3. Placeholder (until user adds keys in Settings)
     """
+    _ = (openai_api_key, openai_image_model, openai_image_quality)  # deprecated for secrets
     provider: Optional[ImageProvider] = None
+    provider_pref = (image_provider or "").strip().lower()
 
-    if image_provider == "sdxl_turbo":
+    if provider_pref == "sdxl_turbo":
         sdxl = SDXLTurboProvider(model_id=sdxl_model_id)
-        # Check at startup whether the required packages are installed
         try:
             import torch  # noqa: F401
             from diffusers import AutoPipelineForText2Image  # noqa: F401
+
             provider = sdxl
-            logger.info("Image generation: using SDXL Turbo (%s)", sdxl._model_id)
+            logger.info("Image generation fallback: SDXL Turbo (%s)", sdxl._model_id)
         except ImportError:
-            logger.warning(
-                "SDXL Turbo requested but diffusers/torch not installed. "
-                "Install with: pip install diffusers[torch] transformers accelerate. "
-                "Falling back to placeholder."
-            )
+            logger.warning("SDXL Turbo requested but deps missing — using placeholder.")
             provider = PlaceholderProvider()
     elif image_gen_api_url:
         provider = ExternalAPIProvider(image_gen_api_url)
-        logger.info("Image generation: using external API at %s", image_gen_api_url)
+        logger.info("Image generation fallback: external API at %s", image_gen_api_url)
     else:
         provider = PlaceholderProvider()
-        logger.info("Image generation: using placeholder provider (Pillow)")
+        logger.info(
+            "Image generation: placeholder until API keys are added in Settings → Image Providers."
+        )
 
     return ImageGenerationService(workspace_root, provider)

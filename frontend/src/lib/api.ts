@@ -80,7 +80,8 @@ export function streamChat(
   signal?: AbortSignal,
   autoApprove: boolean = false,
   model?: string | null,
-  attachmentIds?: string[]
+  attachmentIds?: string[],
+  mode?: "ask" | "agent" | "auto" | null
 ) {
   const url = `${API_BASE}/chat/stream`;
   const msg: Record<string, unknown> = { role: "user", content: message };
@@ -89,6 +90,7 @@ export function streamChat(
     messages: [msg],
     session_key: sessionKey,
     auto_approve: autoApprove,
+    mode: mode || "auto",
   };
   if (model) payload.model = model;
   const body = JSON.stringify(payload);
@@ -453,6 +455,57 @@ export async function updateConfig(data: { ollama_model?: string; ollama_tempera
   return handleRes<{ success: boolean; updated: Record<string, unknown> }>(res);
 }
 
+export interface ImageModelOption {
+  id: string;
+  provider: string;
+  label: string;
+  description: string;
+  aliases: string[];
+  available: boolean;
+}
+
+export interface ProviderSecretInfo {
+  id: number;
+  provider: string;
+  label: string;
+  default_model?: string | null;
+  is_active: boolean;
+  configured: boolean;
+  key_hint?: string | null;
+  updated_at?: string | null;
+}
+
+export async function listImageProviders() {
+  const res = await fetch(`${API_BASE}/providers/image`, { headers: headers() });
+  return handleRes<{
+    supported_providers: string[];
+    secrets: ProviderSecretInfo[];
+    models: ImageModelOption[];
+    note: string;
+  }>(res);
+}
+
+export async function upsertImageProvider(provider: string, data: {
+  api_key: string;
+  default_model?: string;
+  label?: string;
+}) {
+  const res = await fetch(`${API_BASE}/providers/image/${provider}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify({ provider, ...data }),
+  });
+  return handleRes<{ success: boolean; secret: ProviderSecretInfo }>(res);
+}
+
+export async function deleteImageProvider(provider: string) {
+  const res = await fetch(`${API_BASE}/providers/image/${provider}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  return handleRes<{ success: boolean }>(res);
+}
+
 export async function listModels() {
   const res = await fetch(`${API_BASE}/config/models`, { headers: headers() });
   return handleRes<{ models: { name: string; size: number; parameter_size: string; family: string }[]; current: string }>(res);
@@ -684,6 +737,8 @@ export interface ImageGenRequest {
   height?: number;
   steps?: number;
   seed?: number;
+  model?: string;
+  provider?: string;
 }
 export interface ImageGenResponse {
   success: boolean;
@@ -719,7 +774,14 @@ export async function generateImage(req: ImageGenRequest) {
 }
 export async function getImageProviderStatus() {
   const res = await fetch(`${API_BASE}/images/provider/status`, { headers: headers() });
-  return handleRes<{ provider: string; available: boolean; supported_providers: string[] }>(res);
+  return handleRes<{
+    provider: string;
+    available: boolean;
+    supported_providers: string[];
+    configured_providers?: string[];
+    models?: ImageModelOption[];
+    secrets_ui?: string;
+  }>(res);
 }
 export async function getImageHistory(page = 1, perPage = 20) {
   const res = await fetch(`${API_BASE}/images/history?page=${page}&per_page=${perPage}`, { headers: headers() });

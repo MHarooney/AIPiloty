@@ -118,8 +118,9 @@ export default function ChatInput() {
 
     const abort = new AbortController();
     abortRef.current = abort;
-    streamChat(fullMessage, sessionKey, handleSSEEvent, abort.signal, false, selectedModel, attachmentIds);
-  }, [input, isStreaming, sessionKey, addUserMessage, handleSSEEvent, selectedModel, pendingAttachments, workspaceFiles]);
+    const key = useChatStore.getState().ensureSessionKey();
+    streamChat(fullMessage, key, handleSSEEvent, abort.signal, false, selectedModel, attachmentIds, chatMode);
+  }, [input, isStreaming, addUserMessage, handleSSEEvent, selectedModel, pendingAttachments, workspaceFiles, chatMode]);
 
   const handleStop = () => {
     abortRef.current?.abort();

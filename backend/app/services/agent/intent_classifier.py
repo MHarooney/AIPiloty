@@ -52,7 +52,18 @@ _ALWAYS_RETRIEVE_CATEGORIES = frozenset({
 })
 
 # Pattern → (category, tools, confidence_boost)
+# Order: high-signal specifics before broad keywords (Phase C).
 _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
+    # Local models / Ollama (must beat bare "list" → code)
+    (
+        re.compile(
+            r"\blist\s+(my\s+)?(local\s+)?(ollama\s+)?models?\b|\b(ollama|llama|gemma|mistral)\b",
+            re.I,
+        ),
+        "stats",
+        ["verify_ollama_models"],
+        0.55,
+    ),
     # VM / Server
     (re.compile(r"\b(ssh|vm|server|vps|machine|host|connect)\b", re.I), "vm", ["ssh_command", "vm_health_check"], 0.3),
     (re.compile(r"\b(health|status|check|monitor|uptime|disk|memory|cpu)\b", re.I), "vm", ["vm_health_check"], 0.2),
@@ -63,13 +74,36 @@ _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
     # Knowledge / RAG
     (re.compile(r"\b(knowledge|document|search|find|lookup|rag)\b", re.I), "knowledge", ["search_knowledge"], 0.3),
     (re.compile(r"\b(ingest|upload|index)\b", re.I), "knowledge", ["search_knowledge"], 0.2),
-    # Code
+    # Code — write vs browse (no bare "list")
     (re.compile(r"\b(code|file|write|edit|patch|create|workspace)\b", re.I), "code", ["write_file", "apply_patch"], 0.3),
-    (re.compile(r"\b(list|browse|tree|directory)\b", re.I), "code", ["list_host_path"], 0.2),
-    # Documents
-    (re.compile(r"\b(pdf|xlsx|excel|docx|word|pptx|powerpoint|generate|report)\b", re.I), "document", ["generate_pdf", "generate_xlsx", "generate_docx", "generate_pptx"], 0.4),
-    # Image
-    (re.compile(r"\b(image|picture|photo|draw|illustration)\b", re.I), "image", ["generate_image"], 0.4),
+    (
+        re.compile(r"\b(browse|tree|directory)\b|\blist\s+(files?|paths?|dirs?|directories|folders?)\b", re.I),
+        "code",
+        ["list_host_path"],
+        0.3,
+    ),
+    # Documents — require a document type word (do NOT match bare "generate")
+    (
+        re.compile(
+            r"\b(pdf|xlsx|excel|docx|word|pptx|powerpoint|spreadsheet|presentation|report)\b"
+            r"|\bgenerate\s+(a\s+)?(pdf|xlsx|excel|docx|word|pptx|powerpoint|spreadsheet|presentation|report)\b",
+            re.I,
+        ),
+        "document",
+        ["generate_pdf", "generate_xlsx", "generate_docx", "generate_pptx"],
+        0.4,
+    ),
+    # Image — cover / illustration requests (boost above document ties)
+    (
+        re.compile(
+            r"\b(image|picture|photo|draw|illustration|cover\s*art|course\s+cover)\b"
+            r"|\b(generate|create|make)\s+(an?\s+)?(image|picture|photo|illustration|cover)\b",
+            re.I,
+        ),
+        "image",
+        ["generate_image"],
+        0.7,
+    ),
     # Web / Research
     (re.compile(r"\b(search|google|look\s*up|research|find\s+out|recommend)\b", re.I), "search", ["web_search", "fetch_url"], 0.3),
     (re.compile(r"https?://", re.I), "search", ["fetch_url"], 0.5),

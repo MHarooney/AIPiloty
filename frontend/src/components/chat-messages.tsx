@@ -26,6 +26,7 @@ import AvatarSpeechBubble from "./avatar-speech-bubble";
 import { parseToolOutput, isImageFile } from "@/lib/parse-tool-result";
 import DownloadButton from "./download-button";
 import InlineChatImage from "./inline-chat-image";
+import ImageModelChoiceCard, { parseImageChoicePayload } from "./image-model-choice-card";
 
 const QUICK_PROMPTS = [
   { label: "Check my system", prompt: "Run a health check on my system and tell me the specs" },
@@ -94,6 +95,24 @@ function MessageBubble({
       avatarPhase === "thinking");
 
   const msgTime = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const imageChoicePayload = !isUser
+    ? (msg.toolResults || [])
+        .map((tr) =>
+          tr.name === "generate_image" && !tr.error
+            ? parseImageChoicePayload(tr.output)
+            : null
+        )
+        .find(Boolean) || null
+    : null;
+
+  // Prefer the clickable card — hide verbose "type gpt-image-1 / dalle-3" chat text.
+  const displayContent =
+    imageChoicePayload && msg.content
+      ? imageChoicePayload.status === "needs_api_key"
+        ? "Add an image API key in Settings to continue."
+        : "Choose an image model below to continue."
+      : msg.content;
 
   return (
     <div className={cn("group flex gap-3 animate-fade-slide-up", isUser ? "justify-end" : "justify-start")}>
@@ -194,25 +213,44 @@ function MessageBubble({
             {isUser ? (
               <p className="break-words" style={{ overflowWrap: "anywhere" }}>{msg.content}</p>
             ) : (
-              <MarkdownRenderer content={msg.content} />
+              <MarkdownRenderer content={displayContent} />
             )}
           </div>
         )}
 
         {/* Tool results */}
-        {msg.toolResults && msg.toolResults.length > 0 && msg.toolResults.map((tr, i) => {
+        {msg.toolResults && msg.toolResults.length > 0 && (() => {
+          let shownImageChoice = false;
+          return msg.toolResults.map((tr, i) => {
           const file = !tr.error && tr.output ? parseToolOutput(tr.name, tr.output) : null;
           const isImage = file && isImageFile(file);
+          const imageChoice =
+            tr.name === "generate_image" && !tr.error
+              ? parseImageChoicePayload(tr.output)
+              : null;
+          const showChoice = Boolean(imageChoice) && !shownImageChoice;
+          if (showChoice) shownImageChoice = true;
+          const originalPrompt = msg.toolCalls?.find((c) => c.name === "generate_image")
+            ?.arguments?.prompt as string | undefined;
           return (
             <div key={i} className="space-y-1.5">
-              <ToolOutputCard result={tr} />
+              {showChoice && imageChoice ? (
+                <ImageModelChoiceCard
+                  payload={imageChoice}
+                  originalPrompt={originalPrompt}
+                />
+              ) : imageChoice ? null : (
+                <ToolOutputCard result={tr} />
+              )}
               {isImage && <InlineChatImage file={file} />}
               {file && <DownloadButton file={file} />}
             </div>
           );
-        })}
+        });
+        })()}
 
-        {!isUser && msg.finalReport && (
+        {/* Hide execution report when waiting on model/key — card is the primary CTA */}
+        {!isUser && msg.finalReport && !imageChoicePayload && (
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -224,7 +262,6 @@ function MessageBubble({
             />
           </motion.div>
         )}
-
         {/* Timestamp — visible on hover */}
         {!msg.isStreaming && (
           <span className={cn(

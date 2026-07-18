@@ -170,6 +170,7 @@ async def chat_stream(
                 auto_approve=req.auto_approve,
                 model=model_override,
                 session_key=session_key,
+                mode=(req.mode or "auto"),
             ):
                 # Check for client-requested cancellation before yielding each event
                 if cancel_event.is_set():

@@ -5,22 +5,28 @@ import { ShieldAlert, Check, X } from "lucide-react";
 import { streamChat } from "@/lib/api";
 
 export default function ApprovalModal() {
-  const { pendingApproval, setPendingApproval, sessionKey, handleSSEEvent } = useChatStore();
+  const { pendingApproval, setPendingApproval, sessionKey, handleSSEEvent, chatMode, lastUserMessage } = useChatStore();
 
   if (!pendingApproval) return null;
 
   const handleApprove = () => {
     setPendingApproval(null);
-    // Re-send with auto_approve
+    // Re-send with auto_approve (clears backend pending + runs agent)
     streamChat(
-      `Approved: execute ${pendingApproval.name}`,
+      lastUserMessage || `Approved: execute ${pendingApproval.name}`,
       sessionKey,
-      handleSSEEvent
+      handleSSEEvent,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      chatMode
     );
   };
 
   const handleDeny = () => {
     setPendingApproval(null);
+    streamChat("no", sessionKey, handleSSEEvent, undefined, false, undefined, undefined, chatMode);
   };
 
   return (

@@ -57,6 +57,9 @@ class OllamaService:
         self.model = model or settings.ollama_model
         self.temperature = temperature if temperature is not None else settings.ollama_temperature
         self.context_length = context_length or settings.ollama_context_length
+        # Prefer settings; "-1" pins forever (not recommended on laptops).
+        _ka = getattr(settings, "ollama_keep_alive", "5m") or "5m"
+        self.keep_alive: int | str = -1 if str(_ka).strip() == "-1" else _ka
         self.num_predict = settings.ollama_num_predict
 
     # ── Health check ──────────────────────────────────────────────
@@ -83,11 +86,15 @@ class OllamaService:
     async def warm_up(self) -> bool:
         """Pre-load the model into Ollama memory to eliminate cold-start latency.
 
-        Sends a minimal generate request with keep_alive=-1 so the model stays
-        in memory until the server shuts down.  Call this once during app startup.
+        Sends a minimal generate request with configured keep_alive so the model stays
+        warm for subsequent requests (default finite TTL on laptops).  Call this once during app startup.
         Returns True if the model loaded successfully.
         """
-        logger.info("Warming up Ollama model '%s' (keep_alive=-1)...", self.model)
+        logger.info(
+            "Warming up Ollama model '%s' (keep_alive=%s)...",
+            self.model,
+            self.keep_alive,
+        )
         try:
             client = _get_http_client()
             r = await client.post(
@@ -95,13 +102,13 @@ class OllamaService:
                 json={
                     "model": self.model,
                     "prompt": "",
-                    "keep_alive": -1,
+                    "keep_alive": self.keep_alive,
                     "options": {"num_ctx": self.context_length, "num_predict": 0},
                 },
                 timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
             )
             if r.status_code == 200:
-                logger.info("Model '%s' loaded and pinned in Ollama memory.", self.model)
+                logger.info("Model '%s' loaded (keep_alive=%s).", self.model, self.keep_alive)
                 return True
             logger.warning("Warm-up got HTTP %s: %s", r.status_code, r.text[:200])
         except Exception as exc:
@@ -123,9 +130,7 @@ class OllamaService:
                 "model": model_override or self.model,
                 "messages": messages,
                 "stream": False,
-                # keep_alive=-1 pins the model in Ollama memory indefinitely,
-                # eliminating the 7-8s cold-start reload between idle requests.
-                "keep_alive": -1,
+                "keep_alive": self.keep_alive,
                 "options": {
                     "temperature": self.temperature,
                     "num_ctx": self.context_length,
@@ -157,8 +162,7 @@ class OllamaService:
                 "model": model_override or self.model,
                 "messages": messages,
                 "stream": True,
-                # keep_alive=-1 keeps the model loaded between requests (no cold start).
-                "keep_alive": -1,
+                "keep_alive": self.keep_alive,
                 "options": {
                     "temperature": self.temperature,
                     "num_ctx": self.context_length,

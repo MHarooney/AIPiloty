@@ -140,17 +140,36 @@ class GeneratePPTX(BaseTool):
 
 class GenerateImage(BaseTool):
     name = "generate_image"
-    description = "Generate an image from a text prompt. Returns the file path for download."
+    description = (
+        "Generate an image from a detailed text prompt (course covers, UI mockups, illustrations). "
+        "Call WITHOUT model first unless the user already named one. "
+        "If the tool returns status=needs_model_choice, reply with ONE short line only "
+        "(e.g. 'Choose an image model below.') — do NOT list models in chat text; the UI shows "
+        "clickable options. Never invent API keys."
+    )
     parameters = [
-        Param("prompt", "string", "Description of the image to generate"),
+        Param("prompt", "string", "Detailed description of the image to generate"),
+        Param(
+            "model",
+            "string",
+            "Image model id or alias: dall-e-3, gpt-image-1, gemini-2.5-flash-image, "
+            "gemini-3.1-flash-image, nano-banana",
+            required=False,
+        ),
+        Param(
+            "provider",
+            "string",
+            "Optional provider shortcut: openai | gemini",
+            required=False,
+        ),
         Param("negative_prompt", "string", "What to avoid in the image", required=False),
-        Param("width", "integer", "Image width in pixels (default 512)", required=False),
-        Param("height", "integer", "Image height in pixels (default 512)", required=False),
-        Param("steps", "integer", "Number of generation steps (default 20)", required=False),
+        Param("width", "integer", "Image width in pixels (default 1024)", required=False),
+        Param("height", "integer", "Image height in pixels (default 1024)", required=False),
+        Param("steps", "integer", "Number of generation steps for local models (default 20)", required=False),
         Param("filename", "string", "Output filename", required=False),
     ]
     risk_level = "medium"
-    category = "generation"
+    category = "image"
     rate_limit_per_minute = 5
 
     def __init__(self, svc: DocumentGeneratorService):
@@ -158,28 +177,46 @@ class GenerateImage(BaseTool):
 
     async def execute(self, **kw: Any) -> ToolResult:
         try:
-            # Try new image service first (from app_state)
             from ....main import app_state
+
             image_service = app_state.get("image_service")
             if image_service:
                 result = await image_service.generate(
                     prompt=kw.get("prompt", ""),
                     negative_prompt=kw.get("negative_prompt", ""),
-                    width=int(kw.get("width", 512)),
-                    height=int(kw.get("height", 512)),
+                    width=int(kw.get("width", 1024)),
+                    height=int(kw.get("height", 1024)),
                     steps=int(kw.get("steps", 20)),
+                    model=kw.get("model"),
+                    provider=kw.get("provider"),
                 )
+                if result.needs_input:
+                    return ToolResult(
+                        output={
+                            **result.needs_input,
+                            "hint": (
+                                "The UI shows clickable model buttons. Reply with one short line only "
+                                "(e.g. 'Choose an image model below.') — do not list ids in chat."
+                            ),
+                        }
+                    )
                 if result.success:
-                    return ToolResult(output={
-                        "success": True,
-                        "relative_path": result.relative_path,
-                        "seed": result.seed,
-                        "generation_time_ms": result.generation_time_ms,
-                        "download_url": f"/api/v1/files/{result.relative_path}",
-                    })
+                    return ToolResult(
+                        output={
+                            "success": True,
+                            "relative_path": result.relative_path,
+                            "seed": result.seed,
+                            "model": result.model,
+                            "provider": result.provider,
+                            "generation_time_ms": result.generation_time_ms,
+                            "download_url": (
+                                "/api/v1/files/generated/"
+                                + result.relative_path.replace("\\", "/").removeprefix("generated/")
+                            ),
+                        }
+                    )
                 return ToolResult(error=result.error)
 
-            # Fallback to old doc service method
             r = await self._svc.generate_image(**kw)
             if r.get("success"):
                 return ToolResult(output=r)

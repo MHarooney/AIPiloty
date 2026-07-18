@@ -167,6 +167,9 @@ async def lifespan(app: FastAPI):
         image_gen_api_url=settings.image_gen_api_url,
         image_provider=settings.image_provider or None,
         sdxl_model_id=settings.sdxl_model_id,
+        openai_api_key=settings.openai_api_key,
+        openai_image_model=settings.openai_image_model,
+        openai_image_quality=settings.openai_image_quality,
     )
     app_state["image_service"] = image_service
 
@@ -466,6 +469,7 @@ def create_app() -> FastAPI:
     from .api.v1.vms import router as vms_router
     from .api.v1.workspace import router as workspace_router
     from .api.v1.images import router as images_router
+    from .api.v1.providers import router as providers_router
     from .api.v1.auth import router as auth_router
     from .api.v1.attachments import router as attachments_router
     from .api.v1.logs import router as logs_router
@@ -496,6 +500,7 @@ def create_app() -> FastAPI:
     app.include_router(database_router, prefix="/api/v1")
     app.include_router(workspace_router, prefix="/api/v1")
     app.include_router(images_router, prefix="/api/v1")
+    app.include_router(providers_router, prefix="/api/v1")
     app.include_router(attachments_router, prefix="/api/v1")
     app.include_router(config_router, prefix="/api/v1")
     app.include_router(logs_router, prefix="/api/v1")

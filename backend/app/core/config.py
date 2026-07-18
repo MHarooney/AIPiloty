@@ -34,10 +34,13 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "deepseek-coder-v2:16b"
-    # 8192 was the previous default — dangerously small for multi-turn agent
-    # loops with tool results.  32768 fits a full ReAct session comfortably.
+    # Default 8192 for laptop / local Ollama. Raise via OLLAMA_CONTEXT_LENGTH
+    # (e.g. 16384–32768) for heavy multi-turn agent+tool sessions on bigger hosts.
     # Do not set below 4096 or the agent will silently truncate context.
-    ollama_context_length: int = 32768
+    ollama_context_length: int = 8192
+    # Ollama keep_alive: duration string ("5m") or "-1" to pin forever.
+    # Finite TTL avoids RAM pressure on developer machines.
+    ollama_keep_alive: str = "5m"
     ollama_temperature: float = 0.3
     # Cap the number of tokens the model generates per call.  Ollama default is
     # -1 (unlimited), which lets a verbose model produce 8 KB+ responses and
@@ -52,9 +55,14 @@ class Settings(BaseSettings):
     encryption_key: Optional[str] = None
 
     # Image Generation
+    # Providers: "openai" (DALL·E 3, ChatGPT-class), "sdxl_turbo" (local),
+    # "" / "auto" (openai if OPENAI_API_KEY set, else placeholder).
     image_gen_api_url: Optional[str] = None
-    image_provider: str = ""  # "sdxl_turbo" for local SDXL Turbo, "" for auto
+    image_provider: str = ""
     sdxl_model_id: str = "stabilityai/sdxl-turbo"
+    openai_api_key: Optional[str] = None
+    openai_image_model: str = "dall-e-3"
+    openai_image_quality: str = "hd"  # "standard" | "hd"
 
     # Workspace
     workspace_root: Optional[str] = None
@@ -136,6 +144,15 @@ class Settings(BaseSettings):
     # Model router — fast vs smart vs coder model selection.
     ollama_smart_model: str = ""       # if empty: same as ollama_model
     ollama_coder_model: str = ""       # if empty: same as ollama_model
+
+    # Phase C — optional cloud LLM for hard GENERAL_QA only (tools stay local).
+    cloud_llm_enabled: bool = False
+    cloud_llm_model: str = "gpt-4o-mini"
+    # complex_qa | always_qa | never
+    cloud_llm_for: str = "complex_qa"
+
+    # Phase C — embedding semantic refine (uses nomic-embed when available).
+    semantic_router_enabled: bool = True
 
     # Docker Hub credentials (used by pipeline executor for docker push)
     docker_hub_username: Optional[str] = None

@@ -34,14 +34,20 @@ export default function ImagesPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [selectedImage, setSelectedImage] = useState<ImageInfo | null>(null);
-  const [providerInfo, setProviderInfo] = useState<{ provider: string; available: boolean } | null>(null);
+  const [providerInfo, setProviderInfo] = useState<{
+    provider: string;
+    available: boolean;
+    models?: { id: string; label: string; available: boolean; provider: string }[];
+    configured_providers?: string[];
+  } | null>(null);
 
   // Form state
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
-  const [width, setWidth] = useState(512);
-  const [height, setHeight] = useState(512);
+  const [width, setWidth] = useState(1024);
+  const [height, setHeight] = useState(1024);
   const [steps, setSteps] = useState(20);
+  const [selectedModel, setSelectedModel] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const perPage = 12;
@@ -63,7 +69,13 @@ export default function ImagesPage() {
   }, [loadImages]);
 
   useEffect(() => {
-    getImageProviderStatus().then(setProviderInfo).catch(() => {});
+    getImageProviderStatus()
+      .then((info) => {
+        setProviderInfo(info);
+        const available = (info.models || []).filter((m) => m.available);
+        if (available.length === 1) setSelectedModel(available[0].id);
+      })
+      .catch(() => {});
   }, []);
 
   const handleGenerate = async () => {
@@ -76,6 +88,7 @@ export default function ImagesPage() {
         width,
         height,
         steps,
+        model: selectedModel || undefined,
       };
       const result = await generateImage(req);
       if (result.success) {
@@ -135,7 +148,9 @@ export default function ImagesPage() {
               <div className="flex items-center gap-2">
                 <span className={`inline-block w-2 h-2 rounded-full ${providerInfo.available ? "bg-emerald-400" : "bg-red-400"}`} />
                 <span className="text-xs text-gray-400">
-                  {providerInfo.provider === "sdxl_turbo" ? "SDXL Turbo" : providerInfo.provider === "external_api" ? "External API" : "Placeholder"}
+                  {(providerInfo.configured_providers || []).length
+                    ? `Cloud: ${(providerInfo.configured_providers || []).join(", ")}`
+                    : "No API keys — add in Settings → Image Providers"}
                 </span>
               </div>
             )}
@@ -155,6 +170,29 @@ export default function ImagesPage() {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleGenerate();
                 }}
               />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-gray-400">Model</label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full bg-gray-800/50 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-gray-300"
+              >
+                <option value="">Auto (ask in chat / smart default)</option>
+                {(providerInfo?.models || [])
+                  .filter((m) => m.available)
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label} ({m.provider})
+                    </option>
+                  ))}
+              </select>
+              {!(providerInfo?.models || []).some((m) => m.available) && (
+                <p className="text-[11px] text-amber-500/90">
+                  No keys configured. Open Settings → Image Providers to add OpenAI or Gemini.
+                </p>
+              )}
             </div>
 
             {/* Advanced options toggle */}

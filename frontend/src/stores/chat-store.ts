@@ -183,6 +183,7 @@ interface ChatState {
   addTerminalOutput: (output: TerminalOutput) => void;
   setPendingApproval: (tool: ToolCall | null) => void;
   setSessionKey: (key: string) => void;
+  ensureSessionKey: () => string;
   setIsStreaming: (v: boolean) => void;
   setAvatarPhase: (phase: AvatarPhase) => void;
   setSystemState: (state: SystemState) => void;
@@ -393,6 +394,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       try { localStorage.setItem("aipiloty_last_session", key); } catch { /* ignore */ }
     }
     set({ sessionKey: key });
+  },
+  ensureSessionKey: () => {
+    const existing = get().sessionKey;
+    if (existing) return existing;
+    const key =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, "")
+        : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+    get().setSessionKey(key);
+    return key;
   },
   setIsStreaming: (v) => {
     if (typeof document !== "undefined") {
@@ -761,10 +772,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     streamChat(
       originalMessage,
-      state.sessionKey,
+      get().ensureSessionKey(),
       state.handleSSEEvent,
       undefined,
-      true // auto_approve
+      true, // auto_approve
+      undefined,
+      undefined,
+      state.chatMode
     );
   },
 
@@ -786,6 +800,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : m
       ),
     }));
+
+    // Clear backend pending action via CONFIRMATION deny route
+    streamChat("no", state.sessionKey, state.handleSSEEvent, undefined, false, undefined, undefined, state.chatMode);
   },
 
   /* ── Retry / quick-prompts ── */
@@ -820,14 +837,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return { messages: m };
     });
-    streamChat(lastUser, store.sessionKey, store.handleSSEEvent);
+    streamChat(lastUser, store.ensureSessionKey(), store.handleSSEEvent, undefined, false, undefined, undefined, store.chatMode);
   },
 
   sendQuickPrompt: (prompt: string) => {
     const state = get();
     if (state.isStreaming) return;
+    const key = state.ensureSessionKey();
     state.addUserMessage(prompt);
-    streamChat(prompt, state.sessionKey, state.handleSSEEvent);
+    streamChat(prompt, key, state.handleSSEEvent, undefined, false, undefined, undefined, state.chatMode);
   },
 
   /* ── Reset / load ── */

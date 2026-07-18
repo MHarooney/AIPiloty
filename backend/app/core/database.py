@@ -75,7 +75,7 @@ async def get_db() -> AsyncSession:  # type: ignore[misc]
 async def init_db() -> None:
     # Import all models so Base.metadata knows about them
     from ..models import chat, vm, image, audit_log, testing, doc_studio  # noqa: F401
-    from ..models import deployment, webhook  # noqa: F401
+    from ..models import deployment, webhook, provider_secret  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

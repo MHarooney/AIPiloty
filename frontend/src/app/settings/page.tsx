@@ -1,22 +1,83 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import AppShell from "@/components/app-shell";
-import { getConfig, updateConfig } from "@/lib/api";
-import { Settings, Bot, Globe, Wrench, BookOpen, Loader2, Info, Server, Save, Check } from "lucide-react";
+import {
+  getConfig,
+  updateConfig,
+  listImageProviders,
+  upsertImageProvider,
+  deleteImageProvider,
+  type ProviderSecretInfo,
+  type ImageModelOption,
+} from "@/lib/api";
+import {
+  Settings,
+  Bot,
+  Globe,
+  Wrench,
+  BookOpen,
+  Loader2,
+  Server,
+  Save,
+  Image as ImageIcon,
+  KeyRound,
+  Trash2,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { toast } from "sonner";
 
 interface ToolInfo { name: string; description: string; category?: string; risk_level?: string }
+
+const PROVIDER_META: Record<string, { title: string; hint: string; placeholder: string }> = {
+  openai: {
+    title: "OpenAI",
+    hint: "DALL·E 3 / GPT Image — platform.openai.com → API keys",
+    placeholder: "sk-…",
+  },
+  gemini: {
+    title: "Google Gemini",
+    hint: "Imagen 3 / Nano Banana — aistudio.google.com → API key",
+    placeholder: "AIza…",
+  },
+};
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Editable fields
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.1);
   const [contextLength, setContextLength] = useState(8192);
   const [dirty, setDirty] = useState(false);
+
+  const [secrets, setSecrets] = useState<ProviderSecretInfo[]>([]);
+  const [imageModels, setImageModels] = useState<ImageModelOption[]>([]);
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({ openai: "", gemini: "" });
+  const [defaultModels, setDefaultModels] = useState<Record<string, string>>({
+    openai: "dall-e-3",
+    gemini: "gemini-2.5-flash-image",
+  });
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [savingProvider, setSavingProvider] = useState<string | null>(null);
+
+  const loadProviders = useCallback(async () => {
+    try {
+      const data = await listImageProviders();
+      setSecrets(data.secrets || []);
+      setImageModels(data.models || []);
+      setDefaultModels((prev) => {
+        const next = { ...prev };
+        for (const s of data.secrets || []) {
+          if (s.default_model) next[s.provider] = s.default_model;
+        }
+        return next;
+      });
+    } catch {
+      /* backend may still be reloading */
+    }
+  }, []);
 
   useEffect(() => {
     getConfig()
@@ -28,7 +89,8 @@ export default function SettingsPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+    loadProviders();
+  }, [loadProviders]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -47,6 +109,40 @@ export default function SettingsPage() {
     }
   };
 
+  const saveProviderKey = async (provider: string) => {
+    const api_key = (keyDrafts[provider] || "").trim();
+    if (api_key.length < 8) {
+      toast.error("Paste a valid API key first");
+      return;
+    }
+    setSavingProvider(provider);
+    try {
+      await upsertImageProvider(provider, {
+        api_key,
+        default_model: defaultModels[provider],
+        label: PROVIDER_META[provider]?.title || provider,
+      });
+      setKeyDrafts((d) => ({ ...d, [provider]: "" }));
+      toast.success(`${PROVIDER_META[provider]?.title || provider} key saved (encrypted)`);
+      await loadProviders();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save key");
+    } finally {
+      setSavingProvider(null);
+    }
+  };
+
+  const removeProviderKey = async (provider: string) => {
+    if (!confirm(`Remove stored ${provider} API key?`)) return;
+    try {
+      await deleteImageProvider(provider);
+      toast.success("Key removed");
+      await loadProviders();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to remove key");
+    }
+  };
+
   if (loading) {
     return (
       <AppShell>
@@ -58,6 +154,7 @@ export default function SettingsPage() {
   }
 
   const tools: ToolInfo[] = config?.tools_registered || [];
+  const secretByProvider = Object.fromEntries(secrets.map((s) => [s.provider, s]));
 
   const riskColor = (level?: string) => {
     switch (level?.toLowerCase()) {
@@ -72,14 +169,15 @@ export default function SettingsPage() {
     <AppShell>
       <div className="flex-1 overflow-y-auto p-4 pt-14 md:p-6 md:pt-6">
         <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
-          {/* Header */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center">
               <Settings size={20} className="text-gray-400" />
             </div>
             <div className="flex-1">
               <h1 className="text-xl font-bold text-gray-100">Settings</h1>
-              <p className="text-xs text-gray-500">Edit AI parameters below. Other settings require backend .env changes.</p>
+              <p className="text-xs text-gray-500">
+                Image API keys are encrypted in the database — never stored in code or .env.
+              </p>
             </div>
             {dirty && (
               <button
@@ -93,8 +191,104 @@ export default function SettingsPage() {
             )}
           </div>
 
+          <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-indigo-600/15 border border-indigo-500/20 flex items-center justify-center">
+                <ImageIcon size={16} className="text-indigo-400" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                  <KeyRound size={14} className="text-indigo-400" /> Image Providers
+                </h2>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  Add OpenAI and/or Gemini keys here. In chat, the agent asks which model to use when more than one is configured.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(["openai", "gemini"] as const).map((provider) => {
+                const meta = PROVIDER_META[provider];
+                const existing = secretByProvider[provider];
+                const modelsFor = imageModels.filter((m) => m.provider === provider);
+                return (
+                  <div key={provider} className="rounded-xl border border-gray-800/60 bg-gray-950/50 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-gray-200">{meta.title}</p>
+                        <p className="text-[10px] text-gray-500">{meta.hint}</p>
+                      </div>
+                      {existing?.configured ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/40">
+                          {existing.key_hint || "configured"}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 text-gray-500">not set</span>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-gray-500 mb-1 block">API key</label>
+                      <div className="relative">
+                        <input
+                          type={showKeys[provider] ? "text" : "password"}
+                          autoComplete="off"
+                          value={keyDrafts[provider] || ""}
+                          onChange={(e) => setKeyDrafts((d) => ({ ...d, [provider]: e.target.value }))}
+                          placeholder={existing?.configured ? "•••• paste new key to replace" : meta.placeholder}
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-9 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowKeys((s) => ({ ...s, [provider]: !s[provider] }))}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                        >
+                          {showKeys[provider] ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-gray-500 mb-1 block">Default model</label>
+                      <select
+                        value={defaultModels[provider] || ""}
+                        onChange={(e) => setDefaultModels((d) => ({ ...d, [provider]: e.target.value }))}
+                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
+                      >
+                        {(modelsFor.length ? modelsFor : [
+                          { id: defaultModels[provider], label: defaultModels[provider] },
+                        ]).map((m) => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => saveProviderKey(provider)}
+                        disabled={savingProvider === provider}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-500 disabled:opacity-50"
+                      >
+                        {savingProvider === provider ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                        Save key
+                      </button>
+                      {existing?.configured && (
+                        <button
+                          onClick={() => removeProviderKey(provider)}
+                          className="px-3 py-2 rounded-lg border border-red-900/40 text-red-400 text-xs hover:bg-red-950/30"
+                          title="Remove key"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* AI Engine — EDITABLE */}
             <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-4">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
                 <Bot size={16} className="text-purple-400" /> AI Engine
@@ -107,7 +301,7 @@ export default function SettingsPage() {
                     value={model}
                     onChange={(e) => { setModel(e.target.value); setDirty(true); }}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
-                    placeholder="deepseek-coder-v2:16b"
+                    placeholder="llama3.2:3b"
                   />
                 </div>
                 <div>
@@ -142,7 +336,6 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            {/* Application — read-only */}
             <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-3">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
                 <Server size={16} className="text-cyan-400" /> Application
@@ -155,7 +348,6 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            {/* Knowledge */}
             <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-3">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
                 <BookOpen size={16} className="text-emerald-400" /> Knowledge Base
@@ -166,7 +358,6 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            {/* Network */}
             <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-3">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
                 <Globe size={16} className="text-blue-400" /> Network
@@ -177,7 +368,6 @@ export default function SettingsPage() {
             </section>
           </div>
 
-          {/* Tools */}
           <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-3">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
               <Wrench size={16} className="text-amber-400" /> Registered Tools

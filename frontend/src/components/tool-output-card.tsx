@@ -223,9 +223,18 @@ function GlassKeyValueRow({
 export default function ToolOutputCard({ result }: ToolOutputCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
-  const isError = !!result.error;
   const raw = result.error || result.output || "";
   const parsed = useMemo(() => tryParseJSON(raw), [raw]);
+  const nestedFailed =
+    !!parsed &&
+    typeof parsed === "object" &&
+    ((parsed as Record<string, unknown>).success === false ||
+      typeof (parsed as Record<string, unknown>).error === "string" ||
+      (typeof (parsed as Record<string, unknown>).output === "object" &&
+        (parsed as Record<string, unknown>).output !== null &&
+        ((parsed as { output: Record<string, unknown> }).output.success === false ||
+          typeof (parsed as { output: Record<string, unknown> }).output.error === "string")));
+  const isError = !!result.error || nestedFailed;
   const accentColor = isError ? "#f43f5e" : "#10b981";
 
   const handleCopy = () => {

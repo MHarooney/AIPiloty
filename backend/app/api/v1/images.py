@@ -27,6 +27,7 @@ class GenerateRequest(BaseModel):
     steps: int = Field(20, ge=1, le=100)
     seed: Optional[int] = None
     model: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
@@ -76,12 +77,18 @@ def _get_image_service():
 @router.get("/provider/status")
 async def provider_status(identity: str = Depends(require_auth)):
     """Return info about the active image generation provider."""
+    from ...services.provider_secrets import configured_provider_ids, public_catalog
+
     svc = _get_image_service()
     available = await svc.is_configured()
+    configured = await configured_provider_ids()
     return {
         "provider": svc.provider_name,
         "available": available,
-        "supported_providers": ["placeholder", "external_api", "sdxl_turbo"],
+        "configured_providers": sorted(configured),
+        "models": public_catalog(configured),
+        "supported_providers": ["openai", "gemini", "placeholder", "external_api", "sdxl_turbo"],
+        "secrets_ui": "Settings → Image Providers (keys encrypted in DB, not .env)",
     }
 
 
@@ -102,7 +109,14 @@ async def generate_image(
         steps=req.steps,
         seed=req.seed,
         model=req.model,
+        provider=req.provider,
     )
+
+    if result.needs_input:
+        return GenerateResponse(
+            success=False,
+            error=result.error or "Choose an image model or add an API key in Settings.",
+        )
 
     # Persist to DB
     record = GeneratedImage(
@@ -112,8 +126,8 @@ async def generate_image(
         height=result.height if result.success else req.height,
         steps=req.steps,
         seed=result.seed if result.success else req.seed,
-        model=req.model or svc.provider_name,
-        provider=svc.provider_name,
+        model=result.model or req.model or svc.provider_name,
+        provider=result.provider or svc.provider_name,
         relative_path=result.relative_path if result.success else "",
         file_size=result.file_size if result.success else 0,
         generation_time_ms=result.generation_time_ms if result.success else 0,

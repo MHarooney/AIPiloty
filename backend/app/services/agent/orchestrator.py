@@ -22,10 +22,17 @@ import time
 from typing import Any, AsyncGenerator, Optional
 
 from ...core.config import get_settings
+from ...core.metrics import metrics
 from ..llm.ollama_service import OllamaService
 from ..tools.base import BaseTool, ToolResult
 from ..tools.registry import ToolRegistry
 from .guardrails import GuardrailService
+from .message_router import MessageRoute, chat_system_prompt, route_message
+from .pending_actions import pending_actions
+from .tool_selector import select_progressive_tools, selected_pack_name
+from .semantic_router import semantic_router
+from ..llm.model_router import ModelRouter
+from ..llm.cloud_llm import openai_chat_stream, should_use_cloud_for_qa
 from ..memory.working_memory import WorkingMemory
 
 logger = logging.getLogger(__name__)
@@ -34,17 +41,17 @@ MAX_ITERATIONS = 15  # complex UI testing flows need 10-15 iterations (login→n
 MAX_DURATION_SECONDS = 300
 
 # ── System prompt cache ───────────────────────────────────────────────────
-# _build_system_prompt() is a pure function of the tool list, which never
-# changes at runtime.  Cache the result the first time it's called so we
-# don't re-render ~9 KB of text on every single agent run() call.
-_SYSTEM_PROMPT_CACHE: Optional[str] = None
+# Cache system prompts keyed by tool-name set (progressive loading).
+_SYSTEM_PROMPT_CACHE: dict[str, str] = {}
 
 
 def _get_cached_system_prompt(tools: list[BaseTool]) -> str:
-    global _SYSTEM_PROMPT_CACHE
-    if _SYSTEM_PROMPT_CACHE is None:
-        _SYSTEM_PROMPT_CACHE = _build_system_prompt(tools)
-    return _SYSTEM_PROMPT_CACHE
+    key = ",".join(sorted(t.name for t in tools))
+    cached = _SYSTEM_PROMPT_CACHE.get(key)
+    if cached is None:
+        cached = _build_system_prompt(tools)
+        _SYSTEM_PROMPT_CACHE[key] = cached
+    return cached
 
 # ── Tool-call parsing patterns (multi-layer, like the old platform) ──────
 
@@ -251,6 +258,13 @@ IMPORTANT RULES:
 4. For shell commands on the backend host, ALWAYS use **run_terminal_command** — never fabricate or guess command output. Report exit_code, stdout, and stderr exactly as returned.
 5. Questions like **which LLM**, **what AI model**, **DeepSeek or what**, **what model AIPiloty uses**: use **THIS DEPLOYMENT**; if they ask to **verify**, **double-check**, or **what is installed/running**, call **verify_ollama_models** once — **not** get_host_environment.
 
+═══ IMAGE GENERATION ═══
+- API keys for DALL·E / Gemini live in **Settings → Image Providers** (encrypted DB). Never ask the user to paste keys into chat.
+- If the user asks for an image and did not name a model, call **generate_image** with the prompt only (omit model).
+- If the tool returns ``needs_model_choice``: reply with **one short line** only, e.g. "Choose an image model below." Do **not** list model ids or ask them to type gpt-image-1 — the UI shows clickable choices.
+- If ``needs_api_key``: tell them to open Settings → Image Providers (one short line).
+- Aliases when the user names one: "dalle"/"dalle-3" → dall-e-3, "nano banana" → gemini flash image, "imagen" → imagen-3.
+
 ═══ TERMINAL OUTPUT (CRITICAL) ═══
 - When summarizing **run_terminal_command** results: quote stdout/stderr faithfully. Never invent output.
 - If the command fails (non-zero exit code), report the error and stderr — do not silently ignore it.
@@ -422,13 +436,304 @@ class AgentOrchestrator:
         auto_approve: bool = False,
         model: str | None = None,
         session_key: str | None = None,    # Phase 3: for episodic episode tagging
+        mode: str = "auto",                # Phase B: ask | agent | auto
     ) -> AsyncGenerator[SSEEvent, None]:
         """Execute the ReAct agent loop, yielding SSE events."""
         kwargs = {"session_key": session_key}
 
-        # Build system prompt with tool descriptions (cached — pure function of tools)
-        all_tools = self._registry.all_tools()
-        system_prompt = _get_cached_system_prompt(all_tools)
+        # Extract latest user question early (routing + episodic recall)
+        _latest_user_msg = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
+
+        # Wrap user messages through guardrails + attachments (all routes need this)
+        safe_messages = []
+        for m in messages:
+            if m.get("role") == "user":
+                enriched = {**m, "content": self._guardrails.wrap_user_content(str(m.get("content", "")))}
+                att_ids = enriched.pop("attachment_ids", [])
+                if att_ids:
+                    enriched = self._resolve_attachments(enriched, att_ids)
+                else:
+                    enriched.pop("attachment_ids", None)
+                safe_messages.append(enriched)
+            else:
+                clean = {k: v for k, v in m.items() if k != "attachment_ids"}
+                safe_messages.append(clean)
+
+        # Auto-select vision model when images are attached
+        has_images = any("images" in m for m in safe_messages)
+        if has_images and not model:
+            settings = get_settings()
+            vision_model = settings.vision_model
+            if vision_model:
+                model = vision_model
+                logger.info("Auto-selecting vision model %s for image attachments", vision_model)
+
+        start_time = time.monotonic()
+        seen_tool_calls: list[str] = []
+        last_tool_result_fallback: Optional[str] = None
+        execution_steps: list[dict[str, Any]] = []
+        tool_findings: list[dict[str, Any]] = []
+        _eval_retry_done: bool = False
+        _tool_context_parts: list[str] = []
+        total_tools_run = 0
+        url_fetch_nudge_sent = False
+
+        # UI Approve button re-submits with auto_approve — clear pending card state
+        if auto_approve and session_key:
+            pending_actions.clear(session_key)
+
+        _routed = route_message(
+            str(_latest_user_msg or ""),
+            mode=mode or "auto",
+            session_key=session_key,
+        )
+
+        # Phase C: optional embedding refine when Ollama nomic-embed is available
+        try:
+            settings = get_settings()
+            if settings.semantic_router_enabled and _routed.route in (
+                MessageRoute.GENERAL_QA,
+                MessageRoute.AGENT_TASK,
+            ):
+                emb = getattr(self, "_embeddings", None)
+                if emb is None:
+                    try:
+                        from ...main import app_state as _app_state
+                        emb = _app_state.get("embedding_service")
+                    except Exception:
+                        emb = None
+                if emb is not None:
+                    hit = await semantic_router.match(str(_latest_user_msg or ""), emb)
+                    if hit.method == "embedding" and hit.score >= 0.62:
+                        if hit.label == "general_qa" and _routed.route == MessageRoute.AGENT_TASK:
+                            conf = _routed.intent.confidence if _routed.intent else 0.0
+                            if conf < 0.45:
+                                _routed = type(_routed)(
+                                    route=MessageRoute.GENERAL_QA,
+                                    normalized=_routed.normalized,
+                                    intent=_routed.intent,
+                                    static_reply=None,
+                                    reason=f"embed_qa:{hit.score}",
+                                    confirmation=_routed.confirmation,
+                                    mode=_routed.mode,
+                                )
+                        elif hit.label == "agent_task" and _routed.route == MessageRoute.GENERAL_QA:
+                            # Only promote when original looked task-like
+                            if _routed.reason.startswith("default") is False:
+                                pass
+        except Exception as _sem_err:
+            logger.debug("Semantic embed refine skipped: %s", _sem_err)
+
+        yield SSEEvent(
+            "route",
+            {
+                "route": _routed.route.value,
+                "reason": _routed.reason,
+                "intent": (_routed.intent.category if _routed.intent else None),
+                "confidence": (_routed.intent.confidence if _routed.intent else None),
+                "mode": _routed.mode,
+                "confirmation": _routed.confirmation,
+            },
+        )
+        try:
+            await metrics.increment(f"route_{_routed.route.value}")
+            await metrics.increment(f"chat_mode_{(_routed.mode or 'auto')}")
+        except Exception:
+            pass
+
+        if _routed.route == MessageRoute.SMALLTALK:
+            yield SSEEvent(
+                "token",
+                {"token": _routed.static_reply or "Hello! How can I help you today?", "done": True},
+            )
+            return
+
+        if _routed.route == MessageRoute.CLARIFY:
+            yield SSEEvent("thinking", {"iteration": 1, "mode": "clarify"})
+            yield SSEEvent(
+                "token",
+                {
+                    "token": _routed.static_reply
+                    or "I want to help — could you give a bit more detail?",
+                    "done": True,
+                },
+            )
+            return
+
+        if _routed.route == MessageRoute.CONFIRMATION:
+            if _routed.confirmation == "deny":
+                pending_actions.clear(session_key)
+                yield SSEEvent(
+                    "token",
+                    {
+                        "token": _routed.static_reply or "Cancelled — I won't run that action.",
+                        "done": True,
+                    },
+                )
+                return
+
+            # Affirm — execute the stored pending tool
+            action = pending_actions.pop(session_key)
+            if not action:
+                yield SSEEvent(
+                    "token",
+                    {
+                        "token": "I don't have a pending action to confirm. What would you like me to do?",
+                        "done": True,
+                    },
+                )
+                return
+
+            tool = self._registry.get(action.tool_name) or self._registry.get(action.tool_name.lower())
+            if not tool:
+                yield SSEEvent(
+                    "error",
+                    {"message": f"Pending tool '{action.tool_name}' is no longer available."},
+                )
+                return
+
+            yield SSEEvent("thinking", {"iteration": 1, "mode": "confirmation"})
+            yield SSEEvent(
+                "log",
+                {
+                    "level": "info",
+                    "message": f"CONFIRMATION — executing pending {action.tool_name}",
+                    "timestamp": 0,
+                },
+            )
+            yield SSEEvent("tool_start", {"tool": action.tool_name, "arguments": action.arguments})
+            try:
+                pending_args = action.arguments if isinstance(action.arguments, dict) else {}
+                if action.tool_name == "generate_image":
+                    from ..provider_secrets import apply_user_image_model_choice
+
+                    pending_args = apply_user_image_model_choice(
+                        pending_args, str(_latest_user_msg or "")
+                    )
+                result: ToolResult = await tool.execute(**pending_args)
+                result_dict = result.to_dict()
+            except Exception as e:
+                logger.error("Pending tool %s failed: %s", action.tool_name, e)
+                result_dict = {"success": False, "error": str(e)}
+
+            yield SSEEvent(
+                "tool_output",
+                {
+                    "tool": action.tool_name,
+                    "output": json.dumps(result_dict) if isinstance(result_dict, dict) else str(result_dict),
+                },
+            )
+            _ok = result_dict.get("success", True) if isinstance(result_dict, dict) else True
+            summary = (
+                f"Done — executed **{action.tool_name}** "
+                f"({'succeeded' if _ok else 'failed'}).\n\n"
+            )
+            if isinstance(result_dict, dict):
+                err = result_dict.get("error")
+                out = result_dict.get("output") or result_dict.get("data")
+                if err:
+                    summary += f"Error: {err}"
+                elif out is not None:
+                    out_s = out if isinstance(out, str) else json.dumps(out, default=str)
+                    if len(out_s) > 1200:
+                        out_s = out_s[:1200] + "…"
+                    summary += out_s
+            yield SSEEvent("token", {"token": summary, "done": True})
+            return
+
+        if _routed.route == MessageRoute.GENERAL_QA:
+            chat_prompt = chat_system_prompt() + _deployment_llm_section(self._llm)
+            if self._memory and self._memory.size > 0:
+                mem_context = self._memory.get_context_summary(max_entries=5)
+                if mem_context:
+                    chat_prompt += f"\n\n{mem_context}"
+            chat_conversation: list[dict[str, Any]] = [
+                {"role": "system", "content": chat_prompt},
+            ] + safe_messages
+            yield SSEEvent("thinking", {"iteration": 1, "mode": "general_qa"})
+
+            # Phase C: optional cloud LLM for hard reasoning (tools stay local)
+            _complexity = "medium"
+            try:
+                _complexity = ModelRouter().route(str(_latest_user_msg or "")).complexity
+            except Exception:
+                pass
+            use_cloud = should_use_cloud_for_qa(_complexity)
+            yield SSEEvent(
+                "log",
+                {
+                    "level": "info",
+                    "message": (
+                        f"GENERAL_QA — cloud LLM ({get_settings().cloud_llm_model})"
+                        if use_cloud
+                        else "GENERAL_QA — calling LLM without tools"
+                    ),
+                    "timestamp": 0,
+                },
+            )
+            full_chat = ""
+            try:
+                stream = (
+                    openai_chat_stream(chat_conversation)
+                    if use_cloud
+                    else self._llm.chat_stream(
+                        chat_conversation, tools=None, model_override=model
+                    )
+                )
+                async for chunk in stream:
+                    msg_obj = chunk.get("message") or {}
+                    piece = _normalize_llm_content(msg_obj) if msg_obj else ""
+                    if not piece and isinstance(chunk.get("response"), str):
+                        piece = chunk["response"]
+                    if piece:
+                        full_chat += piece
+                        yield SSEEvent("token", {"token": piece, "done": False})
+            except Exception as e:
+                if use_cloud:
+                    logger.warning("Cloud GENERAL_QA failed (%s) — falling back to local", e)
+                    try:
+                        async for chunk in self._llm.chat_stream(
+                            chat_conversation, tools=None, model_override=model
+                        ):
+                            msg_obj = chunk.get("message") or {}
+                            piece = _normalize_llm_content(msg_obj) if msg_obj else ""
+                            if not piece and isinstance(chunk.get("response"), str):
+                                piece = chunk["response"]
+                            if piece:
+                                full_chat += piece
+                                yield SSEEvent("token", {"token": piece, "done": False})
+                    except Exception as e2:
+                        logger.exception("GENERAL_QA LLM stream failed: %s", e2)
+                        yield SSEEvent("error", {"message": f"LLM error: {e2}"})
+                        return
+                else:
+                    logger.exception("GENERAL_QA LLM stream failed: %s", e)
+                    yield SSEEvent("error", {"message": f"LLM error: {e}"})
+                    return
+            if not full_chat.strip():
+                yield SSEEvent(
+                    "token",
+                    {
+                        "token": "I'm here — could you rephrase that or ask a more specific question?",
+                        "done": True,
+                    },
+                )
+            else:
+                yield SSEEvent("token", {"token": "", "done": True})
+            return
+
+        # AGENT_TASK — progressive tool subset + ReAct loop
+        _pack = selected_pack_name(_routed.intent, str(_latest_user_msg or ""))
+        agent_tools = select_progressive_tools(
+            self._registry,
+            _routed.intent,
+            message=str(_latest_user_msg or ""),
+        )
+        _allowed_tool_names = {t.name for t in agent_tools}
+        system_prompt = _get_cached_system_prompt(agent_tools)
         _job = "═══ YOUR JOB ═══\n"
         _idx = system_prompt.find(_job)
         if _idx != -1:
@@ -441,7 +746,6 @@ class AgentOrchestrator:
         else:
             system_prompt += _deployment_llm_section(self._llm)
 
-        # Inject VM context if available
         if self._get_all_vms:
             try:
                 vms = await self._get_all_vms()
@@ -463,20 +767,12 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.warning("Failed to fetch VM context: %s", e)
 
-        # Inject persistent agent memory if available
         if self._memory and self._memory.size > 0:
             mem_context = self._memory.get_context_summary(max_entries=10)
             if mem_context:
                 system_prompt += f"\n\n{mem_context}"
 
-        # ── Phase 3: Episodic Memory Recall ──────────────────────────────
-        # Extract latest user question for semantic episode search
-        _latest_user_msg = next(
-            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
-            "",
-        )
         _working_mem = WorkingMemory()
-
         if self._episodic and _latest_user_msg:
             try:
                 recalls = await self._episodic.recall(
@@ -494,122 +790,24 @@ class AgentOrchestrator:
                 logger.debug("Episodic recall skipped: %s", _ep_err)
 
         _working_mem.set_objective(str(_latest_user_msg)[:200])
-
         wm_section = _working_mem.format_for_prompt()
         if wm_section:
             system_prompt += f"\n\n{wm_section}"
-        # ── End Phase 3 episodic injection ───────────────────────────────
-
-        # Wrap user messages through guardrails (prompt-injection defense + PII redaction)
-        # and resolve any file attachments (images → base64, documents → extracted text)
-        safe_messages = []
-        for m in messages:
-            if m.get("role") == "user":
-                enriched = {**m, "content": self._guardrails.wrap_user_content(str(m.get("content", "")))}
-                # Pop attachment_ids — not part of Ollama message format
-                att_ids = enriched.pop("attachment_ids", [])
-                if att_ids:
-                    enriched = self._resolve_attachments(enriched, att_ids)
-                else:
-                    enriched.pop("attachment_ids", None)
-                safe_messages.append(enriched)
-            else:
-                clean = {k: v for k, v in m.items() if k != "attachment_ids"}
-                safe_messages.append(clean)
 
         conversation: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ] + safe_messages
 
-        # Auto-select vision model when images are attached
-        has_images = any("images" in m for m in safe_messages)
-        if has_images and not model:
-            settings = get_settings()
-            vision_model = settings.vision_model
-            if vision_model:
-                model = vision_model
-                logger.info("Auto-selecting vision model %s for image attachments", vision_model)
+        yield SSEEvent(
+            "log",
+            {
+                "level": "info",
+                "message": f"AGENT_TASK — pack={_pack} progressive tools ({len(agent_tools)}): {', '.join(t.name for t in agent_tools)}",
+                "timestamp": 0,
+            },
+        )
 
-        start_time = time.monotonic()
-        # Track tool call fingerprints to detect stuck loops
-        seen_tool_calls: list[str] = []
-        last_tool_result_fallback: Optional[str] = None
-        # Track execution steps for the final report
-        execution_steps: list[dict[str, Any]] = []
-        tool_findings: list[dict[str, Any]] = []
-        # Phase 2: single retry flag + accumulated context for evaluator
-        _eval_retry_done: bool = False
-        _tool_context_parts: list[str] = []  # tool results for self-evaluator context
-        total_tools_run = 0
-        url_fetch_nudge_sent = False
-
-        # ── Conversational short-circuit (before ReAct loop) ─────────────
-        # If the user sent a pure greeting / pleasantry with no technical content,
-        # skip ALL tool calls and return a warm reply immediately.
-        # This prevents small models from running environment probes on "hello".
-        _GREETINGS = {
-            "hello", "hi", "hey", "hiya", "howdy", "yo", "sup", "greetings",
-            "good morning", "good afternoon", "good evening", "good night",
-            "thanks", "thank you", "thanks!", "thank you!", "thx", "ty",
-            "bye", "goodbye", "see you", "later", "ok", "okay", "k",
-            "cool", "great", "nice", "awesome", "got it", "understood",
-            "sounds good", "sure", "alright", "fine", "yep", "yes", "no",
-            "what's up", "whats up",
-        }
-        _clean_user_msg = _latest_user_msg.strip().lower().rstrip("!?.,")
-        # Only exact greetings/pleasantries short-circuit. Do NOT treat every
-        # short phrase (e.g. "who are you", "are you robot") as conversational —
-        # those must reach the LLM for a real answer.
-        if _clean_user_msg in _GREETINGS:
-            _greeting_replies = {
-                "hello": "Hello! How can I help you today?",
-                "hi": "Hi there! What can I do for you?",
-                "hey": "Hey! What can I help you with?",
-                "hiya": "Hiya! Ready to help — what do you need?",
-                "howdy": "Howdy! What can I do for you?",
-                "yo": "Hey! What's up? How can I help?",
-                "sup": "Not much! What can I help you with?",
-                "greetings": "Greetings! How can I assist you today?",
-                "good morning": "Good morning! How can I help you today?",
-                "good afternoon": "Good afternoon! What can I do for you?",
-                "good evening": "Good evening! How can I help?",
-                "good night": "Good night! Let me know if you need anything.",
-                "thanks": "You're welcome! Let me know if there's anything else I can help with.",
-                "thank you": "You're welcome! Feel free to ask if you need anything else.",
-                "thanks!": "You're welcome! Let me know if there's anything else I can help with.",
-                "thank you!": "You're welcome! Feel free to ask if you need anything else.",
-                "thx": "You're welcome!",
-                "ty": "You're welcome!",
-                "bye": "Goodbye! Feel free to come back anytime.",
-                "goodbye": "Goodbye! Have a great day!",
-                "see you": "See you! Come back anytime.",
-                "later": "Later! I'm here when you need me.",
-                "ok": "Okay! What would you like to do next?",
-                "okay": "Okay! What would you like to do next?",
-                "k": "Okay! What would you like to do next?",
-                "cool": "Cool! What can I help with?",
-                "great": "Great! What would you like to do next?",
-                "nice": "Nice! What can I help with?",
-                "awesome": "Awesome! What would you like to do?",
-                "got it": "Got it! What would you like to do next?",
-                "understood": "Understood! What would you like to do next?",
-                "sounds good": "Sounds good! What should we do next?",
-                "sure": "Sure! What do you need?",
-                "alright": "Alright! What can I help with?",
-                "fine": "Okay! What would you like to do?",
-                "yep": "Okay! What can I help with?",
-                "yes": "Okay! What can I help with?",
-                "no": "No problem. What else can I help with?",
-                "what's up": "Not much! What can I help you with?",
-                "whats up": "Not much! What can I help you with?",
-            }
-            _reply = _greeting_replies.get(
-                _clean_user_msg,
-                "Hello! How can I help you today?",
-            )
-            yield SSEEvent("token", {"token": _reply, "done": True})
-            return
-
+        # AGENT_TASK — existing ReAct loop
         for iteration in range(1, MAX_ITERATIONS + 1):
             elapsed = time.monotonic() - start_time
             if elapsed > MAX_DURATION_SECONDS:
@@ -847,6 +1045,12 @@ class AgentOrchestrator:
 
             tool_name = tool_call["tool"]
             tool_args = tool_call["arguments"]
+            if tool_name == "generate_image" and isinstance(tool_args, dict):
+                from ..provider_secrets import apply_user_image_model_choice
+
+                tool_args = apply_user_image_model_choice(
+                    tool_args, str(_latest_user_msg or "")
+                )
 
             # Stuck detection — same tool+args seen 3 times = break
             fingerprint = json.dumps({"t": tool_name, "a": tool_args}, sort_keys=True)
@@ -859,10 +1063,21 @@ class AgentOrchestrator:
                 })
                 return
 
-            # Normalize tool name (case-insensitive)
+            # Normalize tool name (case-insensitive); prefer progressive subset
             tool = self._registry.get(tool_name) or self._registry.get(tool_name.lower())
+            if tool and tool_name not in _allowed_tool_names and tool.name not in _allowed_tool_names:
+                error_msg = (
+                    f"Tool '{tool_name}' is outside the active tool set for this task. "
+                    f"Available: {', '.join(sorted(_allowed_tool_names))}"
+                )
+                yield SSEEvent("tool_error", {"tool": tool_name, "error": error_msg})
+                conversation.append({
+                    "role": "user",
+                    "content": f"[SYSTEM] Tool error: {error_msg}. Please use one of the available tools or respond directly.",
+                })
+                continue
             if not tool:
-                error_msg = f"Tool '{tool_name}' not found. Available: {', '.join(self._registry.tool_names)}"
+                error_msg = f"Tool '{tool_name}' not found. Available: {', '.join(sorted(_allowed_tool_names) or self._registry.tool_names)}"
                 yield SSEEvent("tool_error", {"tool": tool_name, "error": error_msg})
                 # Tell the model the tool doesn't exist
                 conversation.append({"role": "assistant", "content": content})
@@ -904,6 +1119,14 @@ class AgentOrchestrator:
                     "explanation": f"Requesting permission to execute {tool_name.replace('_', ' ')}",
                     "affected_resources": affected_resources,
                 })
+                if session_key:
+                    pending_actions.set(
+                        session_key,
+                        tool_name=tool_name,
+                        arguments=tool_args if isinstance(tool_args, dict) else {},
+                        risk_level=str(tool.risk_level),
+                        summary=f"Execute {tool_name}",
+                    )
                 conversation.append({"role": "assistant", "content": content})
                 conversation.append({
                     "role": "user",
@@ -927,11 +1150,48 @@ class AgentOrchestrator:
                 "output": json.dumps(result_dict) if isinstance(result_dict, dict) else str(result_dict),
             })
             _success = result_dict.get("success", True) if isinstance(result_dict, dict) else True
+            # Nested tool payload may set success:false while ToolResult.success is True
+            if _success and isinstance(result_dict, dict):
+                _out = result_dict.get("output")
+                if isinstance(_out, dict) and _out.get("success") is False:
+                    _success = False
+                if result_dict.get("error"):
+                    _success = False
             yield SSEEvent("log", {
                 "level": "info" if _success else "error",
                 "message": f"Tool {tool_name} {'completed' if _success else 'failed'}",
                 "timestamp": time.monotonic() - start_time,
             })
+
+            # User must pick an image model / add a key — stop the loop (UI shows clickable card)
+            _needs_status = None
+            if isinstance(result_dict, dict):
+                _out = result_dict.get("output")
+                if isinstance(_out, dict):
+                    _needs_status = _out.get("status")
+                elif isinstance(_out, str):
+                    try:
+                        _parsed = json.loads(_out)
+                        if isinstance(_parsed, dict):
+                            _needs_status = _parsed.get("status")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            if tool_name == "generate_image" and _needs_status in (
+                "needs_model_choice",
+                "needs_api_key",
+            ):
+                yield SSEEvent(
+                    "token",
+                    {
+                        "token": (
+                            "Choose an image model below to continue."
+                            if _needs_status == "needs_model_choice"
+                            else "Add an image API key in Settings to continue."
+                        ),
+                        "done": True,
+                    },
+                )
+                return
 
             # Track for final report
             total_tools_run += 1
