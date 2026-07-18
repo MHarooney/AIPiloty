@@ -151,6 +151,14 @@ def _build_system_prompt(tools: list[BaseTool]) -> str:
 
 You are a ReAct agent — you THINK, then ACT (call tools), then OBSERVE results, then continue until done.
 
+═══ CONVERSATIONAL MESSAGES — NO TOOLS (HIGHEST PRIORITY) ═══
+If the user's message is a greeting, pleasantry, or pure conversational exchange with NO technical request
+(examples: "hello", "hi", "hey", "thanks", "thank you", "good morning", "how are you", "bye", "ok",
+"cool", "great", "sounds good", or any message under ~5 words that is not a technical question):
+- **NEVER call any tool.** Not get_host_environment, not verify_ollama_models, not any other tool.
+- Respond warmly and BRIEFLY in plain text (1-3 sentences). Optionally offer to help.
+- This rule overrides ALL other rules below.
+
 ═══ YOUR JOB ═══
 - **Follow the user's request.** Depth, format, and which tools to use depend on what they asked — there is no fixed template or minimum section count.
 - Use the **AVAILABLE TOOLS** below when they help fulfill the request; answer from your own knowledge when no tool is needed.
@@ -534,6 +542,57 @@ class AgentOrchestrator:
         _tool_context_parts: list[str] = []  # tool results for self-evaluator context
         total_tools_run = 0
         url_fetch_nudge_sent = False
+
+        # ── Conversational short-circuit (before ReAct loop) ─────────────
+        # If the user sent a pure greeting / pleasantry with no technical content,
+        # skip ALL tool calls and return a warm reply immediately.
+        # This prevents small models from running environment probes on "hello".
+        _GREETINGS = {
+            "hello", "hi", "hey", "hiya", "howdy", "yo", "sup", "greetings",
+            "good morning", "good afternoon", "good evening", "good night",
+            "thanks", "thank you", "thanks!", "thank you!", "thx", "ty",
+            "bye", "goodbye", "see you", "later", "ok", "okay", "k",
+            "cool", "great", "nice", "awesome", "got it", "understood",
+            "sounds good", "sure", "alright", "fine", "yep", "yes", "no",
+            "what's up", "whats up",
+        }
+        _clean_user_msg = _latest_user_msg.strip().lower().rstrip("!?.,")
+        _is_conversational = (
+            _clean_user_msg in _GREETINGS
+            or (len(_clean_user_msg.split()) <= 3 and not any(
+                kw in _clean_user_msg for kw in (
+                    "model", "run", "check", "status", "deploy", "vm", "ssh",
+                    "disk", "install", "ollama", "docker", "server", "file",
+                    "code", "generate", "create", "list", "show", "get",
+                    "what", "how", "why", "when", "where", "which",
+                )
+            ))
+        )
+        if _is_conversational:
+            _greeting_replies = {
+                "hello": "Hello! How can I help you today?",
+                "hi": "Hi there! What can I do for you?",
+                "hey": "Hey! What can I help you with?",
+                "hiya": "Hiya! Ready to help — what do you need?",
+                "howdy": "Howdy! What can I do for you?",
+                "yo": "Hey! What's up? How can I help?",
+                "sup": "Not much! What can I help you with?",
+                "greetings": "Greetings! How can I assist you today?",
+                "good morning": "Good morning! How can I help you today?",
+                "good afternoon": "Good afternoon! What can I do for you?",
+                "good evening": "Good evening! How can I help?",
+                "good night": "Good night! Let me know if you need anything.",
+                "thanks": "You're welcome! Let me know if there's anything else I can help with.",
+                "thank you": "You're welcome! Feel free to ask if you need anything else.",
+                "bye": "Goodbye! Feel free to come back anytime.",
+                "goodbye": "Goodbye! Have a great day!",
+            }
+            _reply = _greeting_replies.get(
+                _clean_user_msg,
+                "Got it! Let me know what you'd like to do.",
+            )
+            yield SSEEvent("token", {"token": _reply, "done": True})
+            return
 
         for iteration in range(1, MAX_ITERATIONS + 1):
             elapsed = time.monotonic() - start_time
