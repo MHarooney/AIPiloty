@@ -92,3 +92,6 @@ logs/
 tmp/
 temp/
 .cache/
+
+# pytest shared sqlite
+backend/tests/.pytest_aipiloty.sqlite*

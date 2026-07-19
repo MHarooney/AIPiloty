@@ -1,0 +1,42 @@
+[
+  {
+    "id": "kb_search_nginx",
+    "user": "search the knowledge base for nginx",
+    "expect_route": "agent_task",
+    "expect_pack": "knowledge",
+    "must_call": ["kb_search"],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "kb_fetch_url",
+    "user": "fetch https://example.com and summarize",
+    "expect_route": "agent_task",
+    "expect_pack": "search",
+    "must_call": ["fetch_url"],
+    "must_not_call": ["ssh_command", "generate_image"]
+  },
+  {
+    "id": "kb_lookup_docs",
+    "user": "look up our runbook for nginx in the knowledge base",
+    "expect_route": "agent_task",
+    "expect_pack": "knowledge",
+    "must_call": ["kb_search"],
+    "must_not_call": ["run_terminal_command"]
+  },
+  {
+    "id": "kb_research",
+    "user": "search the knowledge base for onboarding checklist",
+    "expect_route": "agent_task",
+    "expect_pack": "knowledge",
+    "must_call": ["kb_search"],
+    "must_not_call": ["generate_pdf"]
+  },
+  {
+    "id": "kb_plan_feature",
+    "user": "roadmap and strategy steps for rolling out dark mode",
+    "expect_route": "agent_task",
+    "expect_pack": "planning",
+    "must_call": ["create_plan"],
+    "must_not_call": ["ssh_command", "deploy"]
+  }
+]

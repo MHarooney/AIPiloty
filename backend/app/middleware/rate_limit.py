@@ -81,9 +81,14 @@ def _is_expensive(path: str) -> bool:
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Skip health endpoint
+        # Skip health endpoint and entire limiter under automated tests
         if request.url.path in ("/api/v1/health", "/health"):
             return await call_next(request)
+        if os.environ.get("TESTING") == "1":
+            response = await call_next(request)
+            response.headers["X-RateLimit-Limit"] = "unlimited"
+            response.headers["X-RateLimit-Remaining"] = "unlimited"
+            return response
 
         ip = _client_ip(request)
         expensive = _is_expensive(request.url.path)

@@ -2,26 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
-
-
-@pytest.fixture()
-def client():
-    with (
-        patch("app.core.database.init_db", new_callable=AsyncMock),
-        patch("app.services.rag.QdrantStore.ensure_collection", new_callable=AsyncMock),
-    ):
-        from app.core.config import get_settings
-        get_settings.cache_clear()
-
-        from app.main import create_app
-        app = create_app()
-        with TestClient(app, raise_server_exceptions=False) as c:
-            yield c
-
-        get_settings.cache_clear()
 
 
 def test_health_returns_200(client: TestClient):
@@ -53,5 +34,8 @@ def test_health_backwards_compat_fields(client: TestClient):
 
 def test_health_request_id_echoed(client: TestClient):
     """The X-Request-ID header must be echoed back in the response."""
-    resp = client.get("/api/v1/health", headers={"X-Request-ID": "a3d6e8b0-1234-4abc-8def-0123456789ab"})
+    resp = client.get(
+        "/api/v1/health",
+        headers={"X-Request-ID": "a3d6e8b0-1234-4abc-8def-0123456789ab"},
+    )
     assert "x-request-id" in resp.headers

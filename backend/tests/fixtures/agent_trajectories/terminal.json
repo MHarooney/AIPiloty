@@ -1,0 +1,58 @@
+[
+  {
+    "id": "term_docker_ps",
+    "user": "run docker ps on the host",
+    "expect_route": "agent_task",
+    "expect_pack": "vm_shell",
+    "must_call": ["ssh_command"],
+    "must_not_call": ["generate_image", "generate_pdf"]
+  },
+  {
+    "id": "term_ssh_disk",
+    "user": "ssh into the server and check disk",
+    "expect_route": "agent_task",
+    "expect_pack": "vm_shell",
+    "must_call": ["ssh_command"],
+    "must_not_call": ["generate_image", "write_file"]
+  },
+  {
+    "id": "term_list_path",
+    "user": "list files in the workspace root directory",
+    "expect_route": "agent_task",
+    "expect_pack": "code_read",
+    "must_call": ["list_host_path"],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "term_deploy",
+    "user": "deploy the frontend",
+    "expect_route": "agent_task",
+    "expect_pack": "deploy",
+    "must_call": ["deploy"],
+    "must_not_call": ["generate_image"]
+  },
+  {
+    "id": "term_ollama",
+    "user": "list my ollama models",
+    "expect_route": "agent_task",
+    "expect_pack": "ollama",
+    "must_call": ["verify_ollama_models"],
+    "must_not_call": ["write_file", "ssh_command"]
+  },
+  {
+    "id": "term_write_file",
+    "user": "write a file in the workspace called notes.md",
+    "expect_route": "agent_task",
+    "expect_pack": "code_write",
+    "must_call": ["write_file"],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "term_disk_check",
+    "user": "check disk on the server",
+    "expect_route": "agent_task",
+    "expect_pack": "vm_read",
+    "must_call": ["vm_health_check"],
+    "must_not_call": ["generate_image"]
+  }
+]

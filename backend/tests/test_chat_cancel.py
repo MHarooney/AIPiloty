@@ -2,34 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
-
-
-@pytest.fixture()
-def client():
-    with (
-        patch("app.core.database.init_db", new_callable=AsyncMock),
-        patch("app.services.rag.QdrantStore.ensure_collection", new_callable=AsyncMock),
-    ):
-        # Clear settings cache so env vars are picked up fresh
-        from app.core.config import get_settings
-        get_settings.cache_clear()
-
-        from app.main import create_app
-        app = create_app()
-        with TestClient(app, raise_server_exceptions=False) as c:
-            yield c
-
-        get_settings.cache_clear()
 
 
 @pytest.fixture()
 def auth_header():
-    # Use the real configured API key (may come from .env)
     from app.core.config import get_settings
+
     return {"X-API-Key": get_settings().api_key}
 
 

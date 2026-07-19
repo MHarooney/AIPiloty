@@ -43,7 +43,7 @@ IMAGE_MODEL_CATALOG: list[dict[str, Any]] = [
         "id": "gemini-2.5-flash-image",
         "provider": "gemini",
         "label": "Gemini · Nano Banana",
-        "description": "Google Gemini 2.5 Flash Image (Nano Banana)",
+        "description": "Google Gemini 2.5 Flash Image (Nano Banana; uses gemini.google.com if API quota is 0)",
         "aliases": [
             "nano-banana",
             "nano banana",
@@ -58,7 +58,7 @@ IMAGE_MODEL_CATALOG: list[dict[str, Any]] = [
         "id": "gemini-3.1-flash-image",
         "provider": "gemini",
         "label": "Gemini · Nano Banana 2",
-        "description": "Google Gemini 3.1 Flash Image (Nano Banana 2 — newer)",
+        "description": "Google Gemini 3.1 Flash Image (Nano Banana 2; uses gemini.google.com if API quota is 0)",
         "aliases": [
             "nano-banana-2",
             "nano banana 2",

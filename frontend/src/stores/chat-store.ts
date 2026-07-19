@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { notifyToolStart, notifyToolDone, notifyToolError } from "@/lib/notifications";
 import { streamChat } from "@/lib/api";
+import { repairMermaidFencesInMarkdown } from "@/lib/repair-mermaid";
 
 /* ═══════════════════════════════════════════════════════════
    TYPE DEFINITIONS
@@ -343,7 +344,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const msgs = [...s.messages];
       const last = msgs[msgs.length - 1];
       if (last?.role === "assistant") {
-        msgs[msgs.length - 1] = { ...last, isStreaming: false };
+        // Rewrite broken ```mermaid fences before the user sees the final bubble
+        const content = repairMermaidFencesInMarkdown(last.content || "");
+        msgs[msgs.length - 1] = { ...last, content, isStreaming: false };
       }
       return { messages: msgs, isStreaming: false };
     }),

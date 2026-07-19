@@ -155,8 +155,13 @@ class OllamaService:
         tools: Optional[list[dict]] = None,
         *,
         model_override: Optional[str] = None,
+        num_predict: Optional[int] = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream chat completion, yielding parsed JSON chunks."""
+        """Stream chat completion, yielding parsed JSON chunks.
+
+        ``num_predict`` overrides the default cap for short format turns
+        (e.g. research tables) so local models finish sooner.
+        """
         async with _semaphore:
             payload: dict[str, Any] = {
                 "model": model_override or self.model,
@@ -166,7 +171,7 @@ class OllamaService:
                 "options": {
                     "temperature": self.temperature,
                     "num_ctx": self.context_length,
-                    "num_predict": self.num_predict,
+                    "num_predict": num_predict if num_predict is not None else self.num_predict,
                 },
             }
             if tools:

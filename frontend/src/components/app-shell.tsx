@@ -25,6 +25,29 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (!getStoredToken()) router.replace("/login");
   }, [router]);
 
+  // Warm-compile heavy routes in the background so sidebar clicks feel instant in dev
+  useEffect(() => {
+    const warm = () => {
+      for (const href of ["/testing", "/images", "/deployments", "/settings"]) {
+        try {
+          router.prefetch(href);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === "function") {
+      const id = w.requestIdleCallback(warm, { timeout: 2500 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = window.setTimeout(warm, 1200);
+    return () => window.clearTimeout(t);
+  }, [router]);
+
   // Listen for command palette "open-settings" event
   useEffect(() => {
     const handler = () => setSettingsOpen(true);

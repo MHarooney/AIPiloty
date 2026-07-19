@@ -15,6 +15,8 @@ from app.services.agent.semantic_router import lexical_match
 from app.services.tools.base import BaseTool, ToolResult
 from app.services.tools.registry import ToolRegistry
 
+pytestmark = pytest.mark.eval
+
 PASS_THRESHOLD = 0.92  # senior bar for keyword+semantic cascade
 
 

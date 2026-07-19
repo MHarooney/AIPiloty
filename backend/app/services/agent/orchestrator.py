@@ -265,6 +265,99 @@ IMPORTANT RULES:
 - If ``needs_api_key``: tell them to open Settings → Image Providers (one short line).
 - Aliases when the user names one: "dalle"/"dalle-3" → dall-e-3, "nano banana" → gemini flash image, "imagen" → imagen-3.
 
+═══ RICH VISUALS IN CHAT (CRITICAL) ═══
+The chat UI renders Markdown natively. Prefer these formats in the **final answer** (never inside a JSON tool block):
+
+1. **Flowcharts / architecture / sequences / ER / mindmaps / gantt / simple charts**
+   Use a fenced Mermaid block. Do NOT call generate_image for structured diagrams.
+   Hard rules (invalid Mermaid breaks the UI):
+   - Start with a diagram type: ``flowchart``, ``graph``, ``sequenceDiagram``, ``mindmap``, ``pie``, ``erDiagram``, ``gantt``, or ``xychart-beta``.
+   - Node ids: letters/numbers/underscore only. Put labels in brackets: ``cicd[CI/CD]`` — never ``CI/CD[label]``.
+   - Edges: ``A --> B`` or ``A -->|Yes| B``. NEVER write ``style A --> B`` (style is CSS only).
+   - NEVER write ``title=Something`` inside ``graph``/``flowchart`` (causes a lexical error). For flowchart titles use YAML frontmatter; for schedules use a real ``gantt`` diagram with ``title My Title``.
+   - NEVER mix shapes like ``Design[Design]((10d))``. Durations belong in ``gantt`` tasks (``Design :a1, 2024-01-01, 10d``).
+   - Valid style line only: ``style nodeId fill:#312e81,stroke:#6366f1``.
+   - Prefer ``mindmap`` for hierarchical topic maps (DevOps pillars, concept trees). Prefer ``flowchart`` for processes. Prefer ``gantt`` for sprints/schedules.
+
+```mermaid
+flowchart TD
+  A[Start] --> B[Credentials]
+  B --> C{{MFA OK?}}
+  C -->|Yes| D[Session]
+  C -->|No| B
+  D --> E[Dashboard]
+```
+
+Mindmap example (use this shape for "mindmap of X"):
+
+```mermaid
+mindmap
+  root((DevOps))
+    CICD
+      Pipelines
+      GitHub_Actions
+    Containers
+      Docker
+      Kubernetes
+    Monitoring
+      Prometheus
+      Grafana
+```
+
+Sequence example:
+
+```mermaid
+sequenceDiagram
+  User->>API: Login
+  API-->>User: JWT
+```
+
+Simple pie / bar-style charts also use Mermaid (`pie` or `xychart-beta`).
+   Pie values are plain numbers — NEVER append ``%``. Labels MUST be quoted:
+
+```mermaid
+pie showData
+  title Team time
+  "Coding" : 40
+  "Meetings" : 25
+  "Reviews" : 20
+  "Docs" : 15
+```
+
+Bar / line charts MUST use ``xychart-beta`` with ``x-axis`` / ``y-axis`` (hyphenated) and array data.
+NEVER write ``xaxis label`` or ``bar Jan: 1``. Correct shape:
+
+```mermaid
+xychart-beta
+  title "Monthly Deploys"
+  x-axis [Jan, Feb, Mar, Apr]
+  y-axis "Deployments" 0 --> 5
+  bar [1, 2, 3, 4]
+```
+
+ 2. **Tables / comparisons**
+    Use GitHub-flavored Markdown pipe tables in the chat reply (plain pipes — NEVER inside a ```mermaid fence).
+    For product/model comparisons: call **web_search** with short per-item queries, then write a full useful table.
+    After the first successful search, reply immediately — do not keep calling tools.
+    If search is thin, still answer from knowledge like a normal assistant — NEVER fill cells with
+    "No information available" or "No direct comparison available".
+    NEVER invent tools like ``generate_table``, ``create_table``, or ``generate_chart``.
+    NEVER call generate_pdf / generate_docx for an in-chat table.
+    Tables are NOT Excel/PDF tools unless the user explicitly asked for a downloadable file.
+
+ | Model | Speed | Best for |
+ |---|---|---|
+ | A | Fast | Drafts |
+ | B | Slow | Final art |
+
+3. **Math / formulas**
+   Use `$inline$` or `$$display$$`, or a ```math fence with LaTeX.
+
+4. **Freeform drawings / covers / photoreal art**
+   Only then call **generate_image**. Structured flows → Mermaid; pretty pictures → image tool.
+
+Keep Mermaid source valid and complete (matching start/end nodes, no tool JSON wrapped around it).
+
 ═══ TERMINAL OUTPUT (CRITICAL) ═══
 - When summarizing **run_terminal_command** results: quote stdout/stderr faithfully. Never invent output.
 - If the command fails (non-zero exit code), report the error and stderr — do not silently ignore it.
@@ -430,6 +523,220 @@ class AgentOrchestrator:
             result["content"] = f"{prefix}\n\n---\n\n{result['content']}"
         return result
 
+    async def _stream_research_table_fast(
+        self,
+        *,
+        user_message: str,
+        model: str | None,
+        start_time: float,
+    ) -> AsyncGenerator[SSEEvent, None]:
+        """Search-first comparison table — no ReAct tool loop.
+
+        1) Run 1–3 focused web_search calls server-side
+        2) One short LLM format turn (capped tokens)
+        3) Normalize broken vertical / fenced tables before final emit
+        """
+        from .research_table import (
+            RESEARCH_TABLE_FORMAT_SYSTEM,
+            build_format_user_prompt,
+            extract_comparison_queries,
+            normalize_research_table_markdown,
+        )
+
+        yield SSEEvent("thinking", {"iteration": 1, "mode": "research_table"})
+        queries = extract_comparison_queries(user_message)
+        yield SSEEvent(
+            "log",
+            {
+                "level": "info",
+                "message": (
+                    f"RESEARCH_TABLE fast path — searching {len(queries)} quer"
+                    f"{'ies' if len(queries) != 1 else 'y'}, then one format turn"
+                ),
+                "timestamp": time.monotonic() - start_time,
+            },
+        )
+
+        search_tool = self._registry.get("web_search")
+        search_blocks: list[dict[str, Any]] = []
+        if search_tool:
+            for q in queries:
+                yield SSEEvent(
+                    "planning",
+                    {
+                        "tool": "web_search",
+                        "steps": ["Search", q, "Collect snippets"],
+                    },
+                )
+                yield SSEEvent(
+                    "tool_start",
+                    {"tool": "web_search", "arguments": {"query": q, "max_results": 5}},
+                )
+                try:
+                    result = await search_tool.execute(query=q, max_results=5)
+                    result_dict = result.to_dict()
+                except Exception as e:
+                    logger.warning("research_table web_search failed for %r: %s", q, e)
+                    result_dict = {"success": False, "error": str(e)}
+                yield SSEEvent(
+                    "tool_output",
+                    {
+                        "tool": "web_search",
+                        "output": json.dumps(result_dict)
+                        if isinstance(result_dict, dict)
+                        else str(result_dict),
+                    },
+                )
+                out = ""
+                err = None
+                if isinstance(result_dict, dict):
+                    out = result_dict.get("output") or ""
+                    err = result_dict.get("error")
+                    if isinstance(out, dict):
+                        out = json.dumps(out, default=str)
+                search_blocks.append(
+                    {"query": q, "output": str(out or ""), "error": err}
+                )
+                yield SSEEvent(
+                    "log",
+                    {
+                        "level": "info" if not err else "warn",
+                        "message": f"web_search '{q[:60]}' {'ok' if not err else 'failed'}",
+                        "timestamp": time.monotonic() - start_time,
+                    },
+                )
+        else:
+            yield SSEEvent(
+                "log",
+                {
+                    "level": "warn",
+                    "message": "web_search unavailable — formatting from model knowledge",
+                    "timestamp": time.monotonic() - start_time,
+                },
+            )
+
+        format_msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": RESEARCH_TABLE_FORMAT_SYSTEM},
+            {
+                "role": "user",
+                "content": build_format_user_prompt(user_message, search_blocks),
+            },
+        ]
+        yield SSEEvent(
+            "log",
+            {
+                "level": "info",
+                "message": "RESEARCH_TABLE — formatting ChatGPT-style aspect table (num_predict=1400)",
+                "timestamp": time.monotonic() - start_time,
+            },
+        )
+
+        # Buffer the format turn, then emit ONE cleaned answer.
+        # Streaming broken vertical pipes makes the UI look stuck/broken.
+        _IDLE_TIMEOUT_S = 90.0
+        _HARD_CAP_S = 150.0
+        full = ""
+        last_token_at = time.monotonic()
+        format_started = time.monotonic()
+        try:
+            stream_it = self._llm.chat_stream(
+                format_msgs,
+                tools=None,
+                model_override=model,
+                num_predict=1400,
+            ).__aiter__()
+            read_task: asyncio.Task = asyncio.create_task(stream_it.__anext__())
+            while True:
+                if time.monotonic() - format_started > _HARD_CAP_S:
+                    yield SSEEvent(
+                        "log",
+                        {
+                            "level": "warn",
+                            "message": "RESEARCH_TABLE format turn hit hard time cap — finalizing",
+                            "timestamp": time.monotonic() - start_time,
+                        },
+                    )
+                    read_task.cancel()
+                    break
+                done, _ = await asyncio.wait(
+                    {read_task},
+                    timeout=2.5,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if read_task not in done:
+                    idle = time.monotonic() - last_token_at
+                    elapsed = round(time.monotonic() - start_time, 1)
+                    yield SSEEvent(
+                        "progress",
+                        {
+                            "phase": "llm_stream",
+                            "iteration": 1,
+                            "elapsed_s": elapsed,
+                            "message": f"Formatting table… (~{elapsed}s elapsed)",
+                        },
+                    )
+                    if idle > _IDLE_TIMEOUT_S and full.strip():
+                        yield SSEEvent(
+                            "log",
+                            {
+                                "level": "warn",
+                                "message": (
+                                    "RESEARCH_TABLE stream idle — using partial answer"
+                                ),
+                                "timestamp": time.monotonic() - start_time,
+                            },
+                        )
+                        read_task.cancel()
+                        break
+                    continue
+                try:
+                    chunk = read_task.result()
+                except StopAsyncIteration:
+                    break
+                except Exception as e:
+                    logger.warning("research_table stream read error: %s", e)
+                    break
+                read_task = asyncio.create_task(stream_it.__anext__())
+                msg_obj = chunk.get("message") or {}
+                piece = _normalize_llm_content(msg_obj) if msg_obj else ""
+                if not piece and isinstance(chunk.get("response"), str):
+                    piece = chunk["response"]
+                if piece:
+                    last_token_at = time.monotonic()
+                    full += piece
+        except Exception as e:
+            logger.exception("RESEARCH_TABLE format stream failed: %s", e)
+            if not full.strip():
+                yield SSEEvent("error", {"message": f"LLM error: {e}"})
+                return
+
+        cleaned = normalize_research_table_markdown(full)
+        if not cleaned.strip():
+            cleaned = (
+                "I couldn't finish the comparison table. Please try again — "
+                "or ask for the same compare in Ask mode for a quicker answer."
+            )
+        elif cleaned != full.strip():
+            yield SSEEvent(
+                "log",
+                {
+                    "level": "info",
+                    "message": "RESEARCH_TABLE — normalized table Markdown for display",
+                    "timestamp": time.monotonic() - start_time,
+                },
+            )
+
+        yield SSEEvent("token", {"token": cleaned, "done": True})
+        yield SSEEvent(
+            "final_report",
+            {
+                "summary": "Comparison table ready",
+                "tools_used": len(search_blocks),
+                "success": True,
+                "mode": "research_table_fast",
+            },
+        )
+
     async def run(
         self,
         messages: list[dict[str, Any]],
@@ -480,6 +787,9 @@ class AgentOrchestrator:
         _tool_context_parts: list[str] = []
         total_tools_run = 0
         url_fetch_nudge_sent = False
+        research_table_nudge_sent = False
+        research_table_rewrite_sent = False
+        research_table_search_count = 0
 
         # UI Approve button re-submits with auto_approve — clear pending card state
         if auto_approve and session_key:
@@ -508,7 +818,13 @@ class AgentOrchestrator:
                 if emb is not None:
                     hit = await semantic_router.match(str(_latest_user_msg or ""), emb)
                     if hit.method == "embedding" and hit.score >= 0.62:
-                        if hit.label == "general_qa" and _routed.route == MessageRoute.AGENT_TASK:
+                        # Never promote Mermaid/chart turns into the tool agent
+                        # Never demote research tables away from search agent
+                        if (_routed.reason or "").startswith(
+                            ("structured_diagram", "mode_ask_diagram", "research_table")
+                        ):
+                            pass
+                        elif hit.label == "general_qa" and _routed.route == MessageRoute.AGENT_TASK:
                             conf = _routed.intent.confidence if _routed.intent else 0.0
                             if conf < 0.45:
                                 _routed = type(_routed)(
@@ -645,7 +961,30 @@ class AgentOrchestrator:
             return
 
         if _routed.route == MessageRoute.GENERAL_QA:
-            chat_prompt = chat_system_prompt() + _deployment_llm_section(self._llm)
+            # Deterministic Mermaid when the user already supplied chart data
+            if _routed.static_reply:
+                yield SSEEvent("thinking", {"iteration": 1, "mode": "diagram_static"})
+                yield SSEEvent(
+                    "log",
+                    {
+                        "level": "info",
+                        "message": "DIAGRAM — synthesized Mermaid (no tools)",
+                        "timestamp": 0,
+                    },
+                )
+                yield SSEEvent(
+                    "token",
+                    {"token": _routed.static_reply, "done": True},
+                )
+                return
+
+            _is_diagram = (_routed.reason or "").startswith(
+                ("structured_diagram", "mode_ask_diagram")
+            )
+            _is_table = (_routed.reason or "").startswith(("mode_ask_table", "research_table"))
+            chat_prompt = chat_system_prompt(
+                diagram=_is_diagram, table=_is_table
+            ) + _deployment_llm_section(self._llm)
             if self._memory and self._memory.size > 0:
                 mem_context = self._memory.get_context_summary(max_entries=5)
                 if mem_context:
@@ -725,6 +1064,22 @@ class AgentOrchestrator:
                 yield SSEEvent("token", {"token": "", "done": True})
             return
 
+        # ── Research comparison tables: search-first, ONE format turn ─────────
+        # Avoid ReAct freestyle (small Ollama models emit broken vertical tables
+        # for minutes and never call tools). ChatGPT-style: research → answer.
+        _is_research_table = (_routed.reason or "") == "research_table" or (
+            _routed.intent
+            and (_routed.intent.context_hints or {}).get("rich_visual") == "research_table"
+        )
+        if _is_research_table and _routed.route == MessageRoute.AGENT_TASK:
+            async for ev in self._stream_research_table_fast(
+                user_message=str(_latest_user_msg or ""),
+                model=model,
+                start_time=start_time,
+            ):
+                yield ev
+            return
+
         # AGENT_TASK — progressive tool subset + ReAct loop
         _pack = selected_pack_name(_routed.intent, str(_latest_user_msg or ""))
         agent_tools = select_progressive_tools(
@@ -745,6 +1100,11 @@ class AgentOrchestrator:
             )
         else:
             system_prompt += _deployment_llm_section(self._llm)
+
+        if _is_research_table:
+            from .diagram_reply import RESEARCH_TABLE_ADDENDUM
+
+            system_prompt += "\n" + RESEARCH_TABLE_ADDENDUM
 
         if self._get_all_vms:
             try:
@@ -944,6 +1304,123 @@ class AgentOrchestrator:
                     )
                     continue
 
+                # Research tables must search before answering — force one web_search turn
+                if (
+                    (_routed.reason or "") == "research_table"
+                    and total_tools_run == 0
+                    and not research_table_nudge_sent
+                    and self._registry.get("web_search")
+                ):
+                    research_table_nudge_sent = True
+                    # Prefer a short focused query (first named item), not the whole prompt
+                    _msg = str(_latest_user_msg or "")
+                    _first = re.split(r"\b(?:vs\.?|versus|,|and)\b", _msg, maxsplit=1, flags=re.I)[0]
+                    _first = re.sub(
+                        r"^(?:compare|comparison|show|make|create|render)\s+",
+                        "",
+                        _first.strip(),
+                        flags=re.I,
+                    )
+                    q = (_first or _msg)[:80].strip() or _msg[:80]
+                    conversation.append({"role": "assistant", "content": content})
+                    tool_line = json.dumps(
+                        {
+                            "tool": "web_search",
+                            "arguments": {"query": q},
+                        },
+                        ensure_ascii=False,
+                    )
+                    conversation.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM] Comparison/research table request.\n"
+                                "1) Call web_search with SHORT queries (one product/model at a time).\n"
+                                "2) Then reply with a COMPLETE Markdown pipe table — every cell filled with useful content.\n"
+                                "3) NEVER write 'No information available' or 'No direct comparison available'.\n"
+                                "4) If search is thin, still answer from knowledge like ChatGPT would, with brief Notes caveats.\n"
+                                "5) NEVER wrap the table in a ```mermaid fence — plain Markdown pipes only.\n"
+                                "6) Do NOT call generate_pdf or any document tool.\n"
+                                "Output ONLY this block first:\n```json\n"
+                                f"{tool_line}\n```"
+                            ),
+                        },
+                    )
+                    yield SSEEvent(
+                        "log",
+                        {
+                            "level": "info",
+                            "message": "Research table — forcing web_search before final answer",
+                            "timestamp": time.monotonic() - start_time,
+                        },
+                    )
+                    continue
+
+                # Empty placeholder tables after search — force a normal useful rewrite
+                if (
+                    (_routed.reason or "") == "research_table"
+                    and not research_table_rewrite_sent
+                    and re.search(
+                        r"no\s+(direct\s+)?(comparison|information)\s+available"
+                        r"|not\s+enough\s+information"
+                        r"|unable\s+to\s+(find|provide)\s+(a\s+)?(direct\s+)?comparison",
+                        content,
+                        re.I,
+                    )
+                ):
+                    research_table_rewrite_sent = True
+                    conversation.append({"role": "assistant", "content": content})
+                    conversation.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM] Your last reply used empty placeholders. Rewrite NOW as a normal "
+                                "assistant comparison: a full Markdown pipe table with every row/column filled "
+                                "(speed, quality, best for, notes as requested). Use search snippets if any; "
+                                "otherwise use trained knowledge with short caveats. "
+                                "Do NOT call tools. Do NOT say 'No information available'. "
+                                "Do NOT wrap the table in a ```mermaid fence."
+                            ),
+                        },
+                    )
+                    yield SSEEvent(
+                        "log",
+                        {
+                            "level": "warn",
+                            "message": "Research table — rewriting empty placeholder answer",
+                            "timestamp": time.monotonic() - start_time,
+                        },
+                    )
+                    continue
+
+                # Mis-labeled pipe table inside ```mermaid — unwrap for stored answer.
+                # Do NOT re-emit the full cleaned body (would duplicate streamed tokens);
+                # the frontend also unwraps fences for display.
+                if (_routed.reason or "") == "research_table" and "```mermaid" in content.lower():
+                    from .diagram_reply import (
+                        looks_like_markdown_pipe_table,
+                        strip_mermaid_fence_around_pipe_tables,
+                    )
+
+                    _needs_strip = any(
+                        looks_like_markdown_pipe_table(m.group(1))
+                        for m in re.finditer(
+                            r"```mermaid[^\n]*\n([\s\S]*?)```", content, re.I
+                        )
+                    )
+                    if _needs_strip:
+                        content = strip_mermaid_fence_around_pipe_tables(content)
+                        yield SSEEvent(
+                            "log",
+                            {
+                                "level": "info",
+                                "message": (
+                                    "Research table — stripped mermaid fence around pipe table"
+                                ),
+                                "timestamp": time.monotonic() - start_time,
+                            },
+                        )
+
                 # Final answer — flush any remaining un-streamed text
                 remaining = _strip_planner_leaks(_strip_leaked_control_tokens(full_content[emitted_up_to:])).strip()
                 if remaining:
@@ -1045,6 +1522,82 @@ class AgentOrchestrator:
 
             tool_name = tool_call["tool"]
             tool_args = tool_call["arguments"]
+
+            # Small models invent Markdown-only tools (generate_table, etc.)
+            from .diagram_reply import (
+                is_document_file_tool,
+                is_markdown_only_tool,
+                markdown_only_tool_nudge,
+                research_table_document_nudge,
+            )
+
+            if is_markdown_only_tool(str(tool_name or "")):
+                nudge = markdown_only_tool_nudge(str(tool_name))
+                yield SSEEvent(
+                    "log",
+                    {
+                        "level": "warn",
+                        "message": f"Ignored hallucinated tool '{tool_name}' — answering in Markdown",
+                        "timestamp": time.monotonic() - start_time,
+                    },
+                )
+                conversation.append({"role": "assistant", "content": content})
+                conversation.append({
+                    "role": "user",
+                    "content": f"[SYSTEM] {nudge}",
+                })
+                continue
+
+            # Comparison tables are in-chat Markdown — never open PDF/DOCX/etc.
+            if (_routed.reason or "") == "research_table" and is_document_file_tool(
+                str(tool_name or "")
+            ):
+                nudge = research_table_document_nudge(str(tool_name))
+                yield SSEEvent(
+                    "log",
+                    {
+                        "level": "warn",
+                        "message": (
+                            f"Ignored {tool_name} on research_table — Markdown table only"
+                        ),
+                        "timestamp": time.monotonic() - start_time,
+                    },
+                )
+                conversation.append({"role": "assistant", "content": content})
+                conversation.append({"role": "user", "content": f"[SYSTEM] {nudge}"})
+                continue
+
+            # After first successful search on research_table: refuse more tools (latency)
+            if (
+                (_routed.reason or "") == "research_table"
+                and research_table_search_count >= 1
+                and str(tool_name or "").lower()
+                in ("web_search", "fetch_url", "kb_search")
+            ):
+                yield SSEEvent(
+                    "log",
+                    {
+                        "level": "info",
+                        "message": (
+                            f"Ignored extra {tool_name} on research_table — finalize Markdown answer"
+                        ),
+                        "timestamp": time.monotonic() - start_time,
+                    },
+                )
+                conversation.append({"role": "assistant", "content": content})
+                conversation.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM] You already searched. Reply NOW with a complete "
+                            "GitHub-flavored Markdown pipe table (every cell filled) plus "
+                            "Quick takeaways. Do NOT call any more tools. "
+                            "Do NOT use a ```mermaid fence. Do NOT call generate_pdf."
+                        ),
+                    }
+                )
+                continue
+
             if tool_name == "generate_image" and isinstance(tool_args, dict):
                 from ..provider_secrets import apply_user_image_model_choice
 
@@ -1066,6 +1619,22 @@ class AgentOrchestrator:
             # Normalize tool name (case-insensitive); prefer progressive subset
             tool = self._registry.get(tool_name) or self._registry.get(tool_name.lower())
             if tool and tool_name not in _allowed_tool_names and tool.name not in _allowed_tool_names:
+                # Research tables: soft-nudge away from PDF/DOCX without scary toast
+                if (_routed.reason or "") == "research_table" and is_document_file_tool(
+                    str(tool_name or "")
+                ):
+                    nudge = research_table_document_nudge(str(tool_name))
+                    yield SSEEvent(
+                        "log",
+                        {
+                            "level": "warn",
+                            "message": f"Ignored out-of-pack {tool_name} on research_table",
+                            "timestamp": time.monotonic() - start_time,
+                        },
+                    )
+                    conversation.append({"role": "assistant", "content": content})
+                    conversation.append({"role": "user", "content": f"[SYSTEM] {nudge}"})
+                    continue
                 error_msg = (
                     f"Tool '{tool_name}' is outside the active tool set for this task. "
                     f"Available: {', '.join(sorted(_allowed_tool_names))}"
@@ -1077,13 +1646,28 @@ class AgentOrchestrator:
                 })
                 continue
             if not tool:
+                from .diagram_reply import is_markdown_only_tool, markdown_only_tool_nudge
+
+                if is_markdown_only_tool(str(tool_name or "")):
+                    nudge = markdown_only_tool_nudge(str(tool_name))
+                    yield SSEEvent(
+                        "log",
+                        {
+                            "level": "warn",
+                            "message": f"Ignored unknown Markdown-only tool '{tool_name}'",
+                            "timestamp": time.monotonic() - start_time,
+                        },
+                    )
+                    conversation.append({"role": "assistant", "content": content})
+                    conversation.append({"role": "user", "content": f"[SYSTEM] {nudge}"})
+                    continue
                 error_msg = f"Tool '{tool_name}' not found. Available: {', '.join(sorted(_allowed_tool_names) or self._registry.tool_names)}"
                 yield SSEEvent("tool_error", {"tool": tool_name, "error": error_msg})
                 # Tell the model the tool doesn't exist
                 conversation.append({"role": "assistant", "content": content})
                 conversation.append({
                     "role": "user",
-                    "content": f"[SYSTEM] Tool error: {error_msg}. Please use one of the available tools or respond directly.",
+                    "content": f"[SYSTEM] Tool error: {error_msg}. If the user wanted a table/chart/diagram, reply with Markdown or ```mermaid — do not invent tools. Otherwise use an available tool or respond directly.",
                 })
                 continue
 
@@ -1309,10 +1893,29 @@ class AgentOrchestrator:
             # Wrap tool output through guardrails before feeding back to model
             raw_tool_output = json.dumps(result_dict, indent=2)
             safe_tool_output = self._guardrails.wrap_tool_output(tool_name, raw_tool_output)
-            conversation.append({
-                "role": "user",
-                "content": f"[TOOL RESULT for {tool_name}]:\n{safe_tool_output}\n\nNow provide a helpful response to the user based on this result. If you need to call another tool, do so. Otherwise, give your final answer.",
-            })
+            if (_routed.reason or "") == "research_table" and tool_name in (
+                "web_search",
+                "fetch_url",
+                "kb_search",
+            ):
+                if _success:
+                    research_table_search_count += 1
+                follow_up = (
+                    f"[TOOL RESULT for {tool_name}]:\n{safe_tool_output}\n\n"
+                    "[SYSTEM] You have enough research. Reply NOW like ChatGPT would:\n"
+                    "1) A complete GitHub-flavored Markdown pipe table (every cell filled).\n"
+                    "2) A short Quick takeaways section.\n"
+                    "Do NOT call generate_pdf / generate_docx / generate_table / web_search / any other tool.\n"
+                    "Do NOT wrap the table in a ```mermaid fence — plain Markdown pipes only.\n"
+                    "Do NOT write 'No information available'."
+                )
+            else:
+                follow_up = (
+                    f"[TOOL RESULT for {tool_name}]:\n{safe_tool_output}\n\n"
+                    "Now provide a helpful response to the user based on this result. "
+                    "If you need to call another tool, do so. Otherwise, give your final answer."
+                )
+            conversation.append({"role": "user", "content": follow_up})
 
             # Continue loop — model sees tool result and decides what to do next
 

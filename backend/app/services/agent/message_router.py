@@ -21,6 +21,11 @@ from typing import Literal, Optional
 
 from .intent_classifier import Intent, IntentClassifier
 from .pending_actions import pending_actions
+from .diagram_reply import (
+    MERMAID_STRUCTURAL_RE,
+    RESEARCH_TABLE_RE,
+    try_synthesize_mermaid_reply,
+)
 
 ChatMode = Literal["ask", "agent", "auto"]
 
@@ -205,11 +210,51 @@ def route_message(
 
     # ── 3. Ask mode → never tools (except greetings already handled) ─
     if chat_mode == "ask":
+        # Ask mode cannot web_search — still answer as Markdown (no static KB)
+        mermaid = bool(MERMAID_STRUCTURAL_RE.search(message or ""))
+        table = bool(RESEARCH_TABLE_RE.search(message or ""))
         return RoutedMessage(
             route=MessageRoute.GENERAL_QA,
             normalized=normalized,
             intent=_classify(message, classifier),
-            reason="mode_ask",
+            static_reply=try_synthesize_mermaid_reply(message or "") if mermaid else None,
+            reason=(
+                "mode_ask_diagram"
+                if mermaid
+                else ("mode_ask_table" if table else "mode_ask")
+            ),
+            mode=chat_mode,
+        )
+
+    # ── 3b. Mermaid diagrams (user-provided structure/numbers) → no tools ─
+    # Prefer Mermaid over research unless the user explicitly asked for a table.
+    _wants_table = bool(
+        re.search(r"\b(markdown\s+)?table\b", message or "", re.I)
+    )
+    if MERMAID_STRUCTURAL_RE.search(message or "") and not _wants_table:
+        return RoutedMessage(
+            route=MessageRoute.GENERAL_QA,
+            normalized=normalized,
+            intent=_classify(message, classifier),
+            static_reply=try_synthesize_mermaid_reply(message or ""),
+            reason="structured_diagram",
+            mode=chat_mode,
+        )
+
+    # ── 3c. Research / comparison → AGENT + web_search (live info, never static KB) ─
+    if RESEARCH_TABLE_RE.search(message or ""):
+        intent = _classify(message, classifier)
+        intent = Intent(
+            category="search",
+            confidence=max(intent.confidence, 0.85),
+            suggested_tools=["web_search", "fetch_url", "kb_search"],
+            context_hints={**(intent.context_hints or {}), "rich_visual": "research_table"},
+        )
+        return RoutedMessage(
+            route=MessageRoute.AGENT_TASK,
+            normalized=normalized,
+            intent=intent,
+            reason="research_table",
             mode=chat_mode,
         )
 
@@ -406,5 +451,18 @@ If you need tools to complete a task, briefly say what you would need to do and 
 """
 
 
-def chat_system_prompt() -> str:
-    return _CHAT_SYSTEM_PROMPT
+def chat_system_prompt(*, diagram: bool = False, table: bool = False) -> str:
+    from .diagram_reply import DIAGRAM_CHAT_ADDENDUM, RESEARCH_TABLE_ADDENDUM
+
+    prompt = _CHAT_SYSTEM_PROMPT
+    if diagram:
+        prompt += "\n" + DIAGRAM_CHAT_ADDENDUM
+    if table:
+        prompt += (
+            "\n"
+            + RESEARCH_TABLE_ADDENDUM
+            + "\n(Ask mode: you cannot call tools. Use best-known current facts, "
+            "be honest about uncertainty, and still produce a full Markdown table "
+            "with every item/column the user named. Suggest Auto/Agent mode for live web research.)\n"
+        )
+    return prompt

@@ -36,7 +36,13 @@ quote-style = "double"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q -m 'not slow'"
+markers = [
+    "unit: fast deterministic unit tests",
+    "integration: API / TestClient integration tests",
+    "eval: golden-set and trajectory evaluation gates",
+    "slow: long-running or live-dependency tests (nightly)",
+]
 
 [tool.coverage.run]
 source = ["app"]
@@ -54,4 +60,4 @@ exclude_lines = [
     "@overload",
 ]
 show_missing = true
-fail_under = 30
+fail_under = 35

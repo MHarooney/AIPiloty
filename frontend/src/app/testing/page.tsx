@@ -1,16 +1,38 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { TestTube2, Sparkles, Globe, Camera } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import TestingTargetBar from "@/components/testing/testing-target-bar";
-import TestingChatPanel from "@/components/testing/testing-chat-panel";
-import TestingDashboard from "@/components/testing/testing-dashboard";
-import { TestingBrowserMirror } from "@/components/testing/testing-browser-mirror";
 import { useTestingStore } from "@/stores/testing-store";
 import { cn } from "@/lib/utils";
 
 type RightTab = "results" | "browser";
+
+function PanelSkeleton({ label }: { label: string }) {
+  return (
+    <div className="flex h-full items-center justify-center text-xs text-gray-600 animate-pulse">
+      Loading {label}…
+    </div>
+  );
+}
+
+const TestingChatPanel = dynamic(
+  () => import("@/components/testing/testing-chat-panel"),
+  { ssr: false, loading: () => <PanelSkeleton label="chat" /> },
+);
+const TestingDashboard = dynamic(
+  () => import("@/components/testing/testing-dashboard"),
+  { ssr: false, loading: () => <PanelSkeleton label="results" /> },
+);
+const TestingBrowserMirror = dynamic(
+  () =>
+    import("@/components/testing/testing-browser-mirror").then((m) => ({
+      default: m.TestingBrowserMirror,
+    })),
+  { ssr: false, loading: () => <PanelSkeleton label="browser" /> },
+);
 
 export default function TestingPage() {
   const isStreaming = useTestingStore((s) => s.isStreaming);
@@ -39,7 +61,6 @@ export default function TestingPage() {
               <TestTube2 className="w-3.5 h-3.5 text-white" />
             </div>
             <h1 className="text-sm font-semibold text-gray-200 tracking-tight">AI Testing Agent</h1>
-            {/* Browser screenshot count badge */}
             {screenshots.length > 0 && (
               <span className="flex items-center gap-1 ml-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-900/40 border border-emerald-700/40 text-emerald-400 font-medium">
                 <Camera className="w-3 h-3" />
@@ -49,7 +70,6 @@ export default function TestingPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Status chip */}
             {isStreaming ? (
               <span
                 className={cn(
@@ -77,21 +97,16 @@ export default function TestingPage() {
           </div>
         </div>
 
-        {/* ── Target bar ── */}
         <div className="flex-shrink-0">
           <TestingTargetBar />
         </div>
 
-        {/* ── Main content: chat (60%) + right panel (40%) ── */}
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-          {/* Chat panel */}
           <div className="flex-1 md:flex-[3] min-w-0 border-b md:border-b-0 border-r-0 md:border-r border-gray-800/50 overflow-hidden flex flex-col">
             <TestingChatPanel />
           </div>
 
-          {/* Right panel: tabbed Results / Browser */}
           <div className="flex-1 md:flex-[2] min-w-0 overflow-hidden flex flex-col">
-            {/* Tab switcher */}
             <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-800/50 flex-shrink-0 bg-gray-950/40">
               <button
                 onClick={() => setActiveTab("results")}
@@ -126,7 +141,6 @@ export default function TestingPage() {
               </button>
             </div>
 
-            {/* Tab content */}
             <div className="flex-1 min-h-0 overflow-hidden">
               {activeTab === "results" ? (
                 <TestingDashboard />
@@ -140,4 +154,3 @@ export default function TestingPage() {
     </AppShell>
   );
 }
-

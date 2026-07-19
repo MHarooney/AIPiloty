@@ -214,11 +214,22 @@ AIPiloty/
 
 ## Development
 
+### Automated tests vs AI Testing Agent
+
+| Layer | What it is | When it runs |
+|-------|------------|--------------|
+| **Unit / API / eval** | Pytest + Vitest (routing golden set, agent trajectories, chat SSE, image providers) | Every PR via CI (`-m "not slow"`) |
+| **Playwright smoke** | Thin browser journeys (home, mocked chat SSE, `/testing` target bar) | CI after `next build` + `next start` |
+| **AI Testing Agent** (`/testing`) | In-app agent that probes a **live target URL** with browser/API tools | Manual / exploratory — not a substitute for CI unit tests |
+
+Contributors: use pytest/Vitest for regressions; use the Testing Agent when validating a real site end-to-end.
+
 ### Backend
 
 ```bash
 cd backend
-.venv/bin/pytest tests/ -q
+.venv/bin/pytest tests/ -q          # unit + integration + eval (excludes slow)
+.venv/bin/pytest tests/ -m eval -q  # routing + trajectory gates only
 .venv/bin/ruff check app/
 ```
 
@@ -228,7 +239,7 @@ cd backend
 cd frontend
 npm run lint
 npm test
-npm run test:e2e   # Playwright
+npm run test:e2e   # Playwright (starts Next via webServer)
 ```
 
 ### Useful Make targets

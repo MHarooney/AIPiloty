@@ -440,6 +440,31 @@ async def testing_chat_stream(
 
 # ── Testing targets ───────────────────────────────────────────────────────────
 
+@router.get("/demo")
+async def testing_demo_fixture(identity: str = Depends(require_auth)):
+    """Seeded demo target + sample report for contributors (no live site required)."""
+    return {
+        "target": {
+            "name": "Demo Example",
+            "url": "https://example.com",
+            "env_label": "demo",
+        },
+        "sample_report": {
+            "summary": "Demo probe against example.com — replace with your own target URL.",
+            "pass_count": 2,
+            "fail_count": 0,
+            "steps": [
+                {"tool": "probe_api_target", "success": True, "note": "HTTP 200"},
+                {"tool": "analyze_test_failures", "success": True, "note": "No failures"},
+            ],
+        },
+        "note": (
+            "This is a fixture for local exploration. Automated CI uses mocked SSE — "
+            "see README § Automated tests vs AI Testing Agent."
+        ),
+    }
+
+
 @router.get("/targets", response_model=list[TestingTargetOut])
 async def list_targets(
     identity: str = Depends(require_auth),
@@ -498,7 +523,9 @@ async def list_runs(
     identity: str = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(TestRun).order_by(TestRun.created_at.desc()))
+    result = await db.execute(
+        select(TestRun).order_by(TestRun.created_at.desc()).limit(50)
+    )
     runs = result.scalars().all()
     return [
         TestRunOut(

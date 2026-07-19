@@ -135,6 +135,49 @@ class IntentClassifier:
                 tools.setdefault(category, []).extend(suggested)
                 hints[category] = match.group(0)
 
+        # Research comparison tables → prefer search (live facts), never image/document
+        _research_table = bool(
+            re.search(
+                r"\b(markdown\s+table|pipe\s+table|comparison\s+table)\b"
+                r"|\bcompar(?:e|ison)\b.*\btable\b"
+                r"|\btable\b.*\bcompar(?:e|ison)\b"
+                r"|\bin\s+a\s+(markdown\s+)?table\b"
+                r"|\b(show|make|create|render)\s+(a\s+|an\s+)?(comparison\s+)?table\b"
+                r"|\bcompar(?:e|ison)\b.+\b(vs\.?|versus|,|and|with)\b"
+                r"|\bwhich\s+is\s+better\b.+\b(vs\.?|or|and)\b"
+                r"|\b(pros?\s*(?:&|and)\s*cons?)\b.+\b(of|for|vs\.?|versus)\b",
+                message,
+                re.I,
+            )
+        )
+        _mermaid_structural = bool(
+            re.search(
+                r"\b(mermaid|flowchart|sequence\s*diagram|mind\s*map|mindmap|"
+                r"er\s*diagram|gantt|xychart(-beta)?|pie\s*chart|bar\s*chart|line\s*chart|"
+                r"xy\s*chart|architecture\s*diagram)\b"
+                r"|\b(show|draw|make|render|create)\s+(a\s+|an\s+)?(mermaid\s+)?"
+                r"(pie|bar|line|gantt|flow|mind\s*map|chart|diagram)\b",
+                message,
+                re.I,
+            )
+        )
+        if _research_table or _mermaid_structural:
+            scores.pop("image", None)
+            tools.pop("image", None)
+            hints.pop("image", None)
+            scores.pop("document", None)
+            tools.pop("document", None)
+            hints.pop("document", None)
+        if _research_table:
+            scores["search"] = max(scores.get("search", 0), 0.9)
+            tools.setdefault("search", []).extend(["web_search", "fetch_url", "kb_search"])
+            hints["search"] = "research_table"
+        elif _mermaid_structural:
+            # Diagrams use chat Mermaid — do not open web/search tool loop by default
+            scores.pop("search", None)
+            tools.pop("search", None)
+            hints.pop("search", None)
+
         if not scores:
             return Intent(category="general", confidence=0.5, suggested_tools=[], context_hints={})
 

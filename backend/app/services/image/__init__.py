@@ -429,6 +429,167 @@ class GeminiImagesProvider(ImageProvider):
         raise RuntimeError(last_err)
 
 
+# ---------------------------------------------------------------------------
+# Gemini website session fallback (same engine as gemini.google.com)
+# Developer API free-tier image quota is often 0; the consumer app still works.
+# Uses browser Google cookies (or GEMINI_SECURE_1PSID / GEMINI_SECURE_1PSIDTS).
+# ---------------------------------------------------------------------------
+
+_gemini_web_client: Any = None
+_gemini_web_lock = asyncio.Lock()
+_gemini_web_init_error: str = ""
+
+
+def gemini_web_fallback_enabled() -> bool:
+    raw = (os.environ.get("GEMINI_WEB_FALLBACK") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _gemini_web_model_for(api_model: str) -> Any:
+    """Map API catalog ids → gemini.google.com Flash / Pro tiers."""
+    try:
+        from gemini_webapi.constants import Model
+    except ImportError:
+        return None
+    mid = (api_model or "").lower()
+    if "pro" in mid:
+        return getattr(Model, "BASIC_PRO", None) or Model.UNSPECIFIED
+    # Flash-Lite / Nano Banana → free Flash tier (matches website Flash-Lite)
+    return getattr(Model, "BASIC_FLASH", None) or Model.UNSPECIFIED
+
+
+async def _get_gemini_web_client() -> Any:
+    """Lazy singleton GeminiClient from browser cookies or env Secure-1PSID*."""
+    global _gemini_web_client, _gemini_web_init_error
+    if _gemini_web_client is not None:
+        return _gemini_web_client
+    async with _gemini_web_lock:
+        if _gemini_web_client is not None:
+            return _gemini_web_client
+        try:
+            from gemini_webapi import GeminiClient
+        except ImportError as e:
+            _gemini_web_init_error = (
+                "gemini_webapi not installed — pip install 'gemini_webapi[browser]'"
+            )
+            raise RuntimeError(_gemini_web_init_error) from e
+
+        psid = (os.environ.get("GEMINI_SECURE_1PSID") or "").strip() or None
+        psidts = (os.environ.get("GEMINI_SECURE_1PSIDTS") or "").strip() or None
+        client = GeminiClient(secure_1psid=psid, secure_1psidts=psidts)
+        try:
+            await client.init(timeout=60)
+        except Exception as e:
+            _gemini_web_init_error = str(e)
+            raise RuntimeError(
+                f"Gemini website session unavailable ({e}). "
+                "Log into gemini.google.com in Chrome, or set "
+                "GEMINI_SECURE_1PSID + GEMINI_SECURE_1PSIDTS."
+            ) from e
+        _gemini_web_client = client
+        _gemini_web_init_error = ""
+        return client
+
+
+class GeminiWebImagesProvider(ImageProvider):
+    """Generate via gemini.google.com (consumer session) — not the Developer API.
+
+    This is how the website works when AI Studio free-tier image quota is 0.
+    """
+
+    def __init__(self, model: str = "gemini-2.5-flash-image") -> None:
+        self._api_model = (model or "gemini-2.5-flash-image").strip()
+        self._web_model_label = "BASIC_FLASH"
+
+    @property
+    def name(self) -> str:
+        return f"gemini-web:{self._web_model_label}"
+
+    async def is_available(self) -> bool:
+        if not gemini_web_fallback_enabled():
+            return False
+        try:
+            await _get_gemini_web_client()
+            return True
+        except Exception:
+            return False
+
+    async def generate(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        seed: Optional[int] = None,
+    ) -> bytes:
+        import tempfile
+
+        full_prompt = prompt.strip()
+        if negative_prompt:
+            full_prompt = f"{full_prompt}. Avoid: {negative_prompt[:200]}"
+        # Consumer Gemini only generates when asked to "generate/create" an image
+        lowered = full_prompt.lower()
+        if not any(
+            k in lowered for k in ("generate", "create", "draw", "image of", "picture")
+        ):
+            full_prompt = f"Generate an image: {full_prompt}"
+
+        client = await _get_gemini_web_client()
+        web_model = _gemini_web_model_for(self._api_model)
+        try:
+            resp = await client.generate_content(full_prompt[:4000], model=web_model)
+        except Exception as e:
+            raise RuntimeError(f"Gemini website generate failed: {e}") from e
+
+        images = list(getattr(resp, "images", None) or [])
+        if not images:
+            text = (getattr(resp, "text", None) or "").strip()
+            raise RuntimeError(
+                text
+                or "Gemini website returned no image (quota may be exhausted — "
+                "check gemini.google.com Settings)."
+            )
+
+        img = images[0]
+        self._web_model_label = getattr(web_model, "name", None) or str(web_model)
+        with tempfile.TemporaryDirectory(prefix="aipiloty_gweb_") as td:
+            fname = "out.png"
+            await img.save(path=td, filename=fname)
+            path = Path(td) / fname
+            if not path.exists() or path.stat().st_size < 100:
+                raise RuntimeError("Gemini website image save produced an empty file")
+            return path.read_bytes()
+
+
+async def try_gemini_web_fallback(
+    prompt: str,
+    negative_prompt: str = "",
+    width: int = 1024,
+    height: int = 1024,
+    steps: int = 20,
+    seed: Optional[int] = None,
+    model: str = "gemini-2.5-flash-image",
+) -> Optional[tuple[bytes, str]]:
+    """Return (bytes, provider_name) or None if web fallback unavailable/disabled."""
+    if not gemini_web_fallback_enabled():
+        return None
+    try:
+        provider = GeminiWebImagesProvider(model=model)
+        data = await provider.generate(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            steps=steps,
+            seed=seed,
+        )
+        return data, provider.name
+    except Exception as e:
+        logger.warning("Gemini website fallback skipped: %s", e)
+        return None
+
+
 def build_provider_from_secret(provider: str, api_key: str, model: str) -> ImageProvider:
     if provider == "openai":
         return OpenAIImagesProvider(api_key=api_key, model=model)
@@ -610,54 +771,73 @@ class ImageGenerationService:
         except Exception as e:
             err_text = str(e)
             logger.error("Image generation failed: %s", e)
-            # Soft-fallback: Gemini quota / missing model → OpenAI if configured
+            # Soft-fallback chain when Developer API fails:
+            # 1) gemini.google.com session (same as the website / Flash-Lite)
+            # 2) OpenAI gpt-image-1 if configured
             if (
                 used_provider_name.startswith("gemini")
                 and ("429" in err_text or "404" in err_text or "quota" in err_text.lower())
             ):
-                try:
-                    from ..provider_secrets import resolve_image_backend
-
-                    openai_backend, _ = await resolve_image_backend(
-                        model="gpt-image-1", provider="openai"
+                web = await try_gemini_web_fallback(
+                    prompt=prompt,
+                    negative_prompt=full_negative,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    seed=seed,
+                    model=used_model or "gemini-2.5-flash-image",
+                )
+                if web:
+                    img_bytes, used_provider_name = web
+                    logger.warning(
+                        "Gemini API failed (%s); used gemini.google.com session instead",
+                        err_text[:120],
                     )
-                    if openai_backend:
-                        logger.warning(
-                            "Gemini failed (%s); falling back to OpenAI gpt-image-1",
-                            err_text[:120],
+                else:
+                    try:
+                        from ..provider_secrets import resolve_image_backend
+
+                        openai_backend, _ = await resolve_image_backend(
+                            model="gpt-image-1", provider="openai"
                         )
-                        active_provider = build_provider_from_secret(
-                            openai_backend.provider,
-                            openai_backend.api_key,
-                            openai_backend.model,
-                        )
-                        used_model = openai_backend.model
-                        used_provider_name = active_provider.name
-                        img_bytes = await active_provider.generate(
-                            prompt=prompt,
-                            negative_prompt=full_negative,
-                            width=width,
-                            height=height,
-                            steps=steps,
-                            seed=seed,
-                        )
-                    else:
+                        if openai_backend:
+                            logger.warning(
+                                "Gemini API+web failed (%s); falling back to OpenAI gpt-image-1",
+                                err_text[:120],
+                            )
+                            active_provider = build_provider_from_secret(
+                                openai_backend.provider,
+                                openai_backend.api_key,
+                                openai_backend.model,
+                            )
+                            used_model = openai_backend.model
+                            used_provider_name = active_provider.name
+                            img_bytes = await active_provider.generate(
+                                prompt=prompt,
+                                negative_prompt=full_negative,
+                                width=width,
+                                height=height,
+                                steps=steps,
+                                seed=seed,
+                            )
+                        else:
+                            return ImageResult(
+                                success=False,
+                                error=(
+                                    f"{err_text}\n\nGemini Developer API quota unavailable. "
+                                    "Log into gemini.google.com in Chrome (web fallback), "
+                                    "enable AI Studio billing, or use OpenAI."
+                                ),
+                                model=used_model,
+                                provider=used_provider_name,
+                            )
+                    except Exception as fallback_err:
                         return ImageResult(
                             success=False,
-                            error=(
-                                f"{err_text}\n\nGemini image quota/model unavailable. "
-                                "Add billing in Google AI Studio, or use an OpenAI model."
-                            ),
+                            error=f"{err_text} | OpenAI fallback also failed: {fallback_err}",
                             model=used_model,
                             provider=used_provider_name,
                         )
-                except Exception as fallback_err:
-                    return ImageResult(
-                        success=False,
-                        error=f"{err_text} | OpenAI fallback also failed: {fallback_err}",
-                        model=used_model,
-                        provider=used_provider_name,
-                    )
             else:
                 return ImageResult(
                     success=False,

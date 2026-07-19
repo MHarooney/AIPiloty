@@ -120,14 +120,43 @@ _IMAGE_RE = re.compile(
     r"|\b(generate|create|make)\s+(an?\s+)?(image|picture|photo|illustration|cover)\b",
     re.I,
 )
+_MERMAID_STRUCTURAL_RE = re.compile(
+    r"\b(mermaid|flowchart|mindmap|mind\s*map|gantt|xychart(-beta)?|"
+    r"pie\s*chart|bar\s*chart|line\s*chart|xy\s*chart|sequence\s*diagram|"
+    r"er\s*diagram|architecture\s*diagram)\b"
+    r"|\b(show|draw|make|render|create)\s+(a\s+|an\s+)?(mermaid\s+)?"
+    r"(pie|bar|line|gantt|flow|mind\s*map|chart|diagram)\b",
+    re.I,
+)
+_RESEARCH_TABLE_RE = re.compile(
+    r"\b(markdown\s+table|pipe\s+table|comparison\s+table)\b"
+    r"|\bcompar(?:e|ison)\b.*\btable\b"
+    r"|\btable\b.*\bcompar(?:e|ison)\b"
+    r"|\bin\s+a\s+(markdown\s+)?table\b"
+    r"|\b(show|make|create|render)\s+(a\s+|an\s+)?(comparison\s+)?table\b"
+    r"|\bcompar(?:e|ison)\b.+\b(vs\.?|versus|,|and|with)\b"
+    r"|\bwhich\s+is\s+better\b.+\b(vs\.?|or|and)\b"
+    r"|\b(pros?\s*(?:&|and)\s*cons?)\b.+\b(of|for|vs\.?|versus)\b",
+    re.I,
+)
 
 
 def resolve_pack_name(intent: Optional[Intent], message: str = "") -> str:
     """Pick the safest pack that still covers the user intent."""
     msg = message or ""
 
+    # Comparison / research tables → live web search (never static KB, never image pack)
+    if _RESEARCH_TABLE_RE.search(msg) or (
+        intent and (intent.context_hints or {}).get("rich_visual") == "research_table"
+    ):
+        return "search"
+
+    # Mermaid diagrams → planning pack if agent somehow runs (usually GENERAL_QA)
+    if _MERMAID_STRUCTURAL_RE.search(msg):
+        return "planning"
+
     # High-signal message overrides (order matters)
-    if _IMAGE_RE.search(msg):
+    if _IMAGE_RE.search(msg) and not _MERMAID_STRUCTURAL_RE.search(msg):
         return "image"
     if _OLLAMA_RE.search(msg):
         return "ollama"

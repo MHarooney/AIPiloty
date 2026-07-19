@@ -30,6 +30,8 @@ import ImageModelChoiceCard, { parseImageChoicePayload } from "./image-model-cho
 
 const QUICK_PROMPTS = [
   { label: "Check my system", prompt: "Run a health check on my system and tell me the specs" },
+  { label: "Login flowchart", prompt: "Show a Mermaid flowchart for a typical user login flow (start → credentials → MFA → session → dashboard)." },
+  { label: "Compare in a table", prompt: "Compare gpt-image-1, Gemini Flash Image, and DALL·E 3 in a markdown table (speed, quality, best for, notes)." },
   { label: "Generate a PDF", prompt: "Generate a sample PDF report" },
   { label: "What model is running?", prompt: "What LLM model is this app using?" },
   { label: "Search the web", prompt: "Fetch https://ollama.com/library and summarize the top models" },
@@ -49,13 +51,18 @@ const PHASE_STATUS_TEXT: Record<string, string> = {
 function MessageBubble({
   msg,
   priorUserContent,
+  showRetry = false,
 }: {
   msg: ChatMessage;
   /** Previous message content when it was the user (used to detect URL intents). */
   priorUserContent?: string;
+  /** Show regenerate control on the latest finished assistant turn. */
+  showRetry?: boolean;
 }) {
   const isUser = msg.role === "user";
   const avatarPhase = useChatStore((s) => s.avatarPhase);
+  const isStreaming = useChatStore((s) => s.isStreaming);
+  const retryLastMessage = useChatStore((s) => s.retryLastMessage);
   const systemState = useChatStore((s) => s.systemState);
   const dismissMessageFinalReport = useChatStore((s) => s.dismissMessageFinalReport);
   const currentPhase = msg.isStreaming ? avatarPhase : (msg.role === "assistant" ? "success" : "idle");
@@ -205,7 +212,7 @@ function MessageBubble({
               "rounded-2xl px-4 py-3 text-sm relative overflow-hidden",
               isUser
                 ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white rounded-br-md"
-                : "bg-gray-800/80 text-gray-200 rounded-bl-md border border-gray-700/50",
+                : "w-full bg-gray-800/80 text-gray-200 rounded-bl-md border border-gray-700/50",
               msg.isStreaming && "typing-cursor",
               !isUser && "energy-ripple-hover"
             )}
@@ -213,7 +220,7 @@ function MessageBubble({
             {isUser ? (
               <p className="break-words" style={{ overflowWrap: "anywhere" }}>{msg.content}</p>
             ) : (
-              <MarkdownRenderer content={displayContent} />
+              <MarkdownRenderer content={displayContent} isStreaming={!!msg.isStreaming} />
             )}
           </div>
         )}
@@ -272,12 +279,16 @@ function MessageBubble({
           </span>
         )}
 
-        {/* Retry button on errored assistant messages */}
-        {!isUser && !msg.isStreaming && msg.content?.includes("**Error:**") && (
+        {/* Retry / regenerate — last assistant turn, or hard **Error:** replies */}
+        {!isUser &&
+          !msg.isStreaming &&
+          !isStreaming &&
+          (showRetry || msg.content?.includes("**Error:**")) && (
           <button
-            onClick={() => useChatStore.getState().retryLastMessage()}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-indigo-400 transition-colors mt-1 group"
+            onClick={() => retryLastMessage()}
+            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-indigo-400 transition-colors mt-1 group opacity-70 hover:opacity-100"
             aria-label="Retry this message"
+            title="Regenerate the last reply"
           >
             <RefreshCw size={12} className="group-hover:rotate-180 transition-transform duration-300" />
             Retry
@@ -371,23 +382,37 @@ export default function ChatMessages() {
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-10 py-6 pt-14 md:pt-6" role="log" aria-live="polite" aria-label="Chat messages">
       <div className="space-y-5 w-full">
         <AnimatePresence initial={false}>
-          {messages.map((msg, i) => (
-            <motion.div
-              key={msg.id}
-              initial={{ opacity: 0, y: 20, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <MessageBubble
-                msg={msg}
-                priorUserContent={
-                  i > 0 && messages[i - 1].role === "user"
-                    ? messages[i - 1].content
-                    : undefined
-                }
-              />
-            </motion.div>
-          ))}
+          {(() => {
+            const lastAssistantIdx = messages.reduce(
+              (acc, m, idx) => (m.role === "assistant" ? idx : acc),
+              -1,
+            );
+            return messages.map((msg, i) => {
+              const showRetry =
+                !isStreaming &&
+                msg.role === "assistant" &&
+                i === lastAssistantIdx &&
+                !msg.isStreaming;
+              return (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 20, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <MessageBubble
+                    msg={msg}
+                    showRetry={showRetry}
+                    priorUserContent={
+                      i > 0 && messages[i - 1].role === "user"
+                        ? messages[i - 1].content
+                        : undefined
+                    }
+                  />
+                </motion.div>
+              );
+            });
+          })()}
         </AnimatePresence>
 
         {/* Planning timeline (when AI is planning) */}

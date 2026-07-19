@@ -1,0 +1,50 @@
+[
+  {
+    "id": "greet_hello",
+    "user": "hello",
+    "expect_route": "smalltalk",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["generate_image", "ssh_command", "run_terminal_command", "deploy"]
+  },
+  {
+    "id": "greet_thanks",
+    "user": "thanks",
+    "expect_route": "smalltalk",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["fetch_url", "kb_search", "generate_pdf"]
+  },
+  {
+    "id": "greet_bye",
+    "user": "goodbye",
+    "expect_route": "smalltalk",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "qa_what_is",
+    "user": "what is AIPiloty",
+    "expect_route": "general_qa",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["ssh_command", "run_terminal_command", "deploy"]
+  },
+  {
+    "id": "qa_explain",
+    "user": "explain recursion in simple words",
+    "expect_route": "general_qa",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["generate_image", "write_file"]
+  },
+  {
+    "id": "clarify_stuff",
+    "user": "stuff",
+    "expect_route": "clarify",
+    "expect_pack": null,
+    "must_call": [],
+    "must_not_call": ["ssh_command", "deploy", "generate_image"]
+  }
+]

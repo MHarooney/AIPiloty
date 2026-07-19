@@ -1,0 +1,50 @@
+[
+  {
+    "id": "doc_pdf_taxes",
+    "user": "generate a pdf about taxes",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_pdf"],
+    "must_not_call": ["generate_image", "ssh_command"]
+  },
+  {
+    "id": "doc_xlsx_users",
+    "user": "generate an xlsx report of users",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_xlsx"],
+    "must_not_call": ["deploy", "ssh_command"]
+  },
+  {
+    "id": "doc_pptx_slides",
+    "user": "create a powerpoint presentation about devops",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_pptx"],
+    "must_not_call": ["run_terminal_command"]
+  },
+  {
+    "id": "doc_docx_letter",
+    "user": "generate a word document resignation letter",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_docx"],
+    "must_not_call": ["generate_image"]
+  },
+  {
+    "id": "doc_pdf_policy",
+    "user": "make a PDF policy document for remote work",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_pdf"],
+    "must_not_call": ["fetch_url"]
+  },
+  {
+    "id": "doc_spreadsheet",
+    "user": "create an excel spreadsheet of quarterly sales",
+    "expect_route": "agent_task",
+    "expect_pack": "document",
+    "must_call": ["generate_xlsx"],
+    "must_not_call": ["ssh_command"]
+  }
+]

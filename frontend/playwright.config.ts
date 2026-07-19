@@ -1,12 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const isCI = !!process.env.CI
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
-  forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? 'github' : 'list',
+  forbidOnly: isCI,
+  retries: isCI ? 2 : 0,
+  workers: isCI ? 1 : undefined,
+  reporter: isCI ? 'github' : 'list',
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
@@ -18,12 +20,11 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: process.env.CI
-    ? undefined
-    : {
-        command: 'npm run dev',
-        url: 'http://localhost:3000',
-        reuseExistingServer: true,
-        timeout: 60_000,
-      },
+  // CI builds first, then `npm run start`. Locally reuse `npm run dev` if already up.
+  webServer: {
+    command: isCI ? 'npm run start' : 'npm run dev',
+    url: 'http://localhost:3000',
+    reuseExistingServer: !isCI,
+    timeout: isCI ? 120_000 : 60_000,
+  },
 })

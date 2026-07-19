@@ -1,0 +1,67 @@
+[
+  {
+    "id": "img_cover_no_model",
+    "user": "Generate a course cover image for Accounting",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["fetch_url", "ssh_command", "generate_pdf"],
+    "generate_image": { "omit_model": true }
+  },
+  {
+    "id": "img_picture_prompt",
+    "user": "Create an illustration of a rocket launching",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "img_photo_request",
+    "user": "make a photo of a modern office lobby",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["write_file"]
+  },
+  {
+    "id": "img_named_gpt",
+    "user": "Generate an image using model gpt-image-1 of a blue whale",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["fetch_url"]
+  },
+  {
+    "id": "img_nano_banana",
+    "user": "Generate a picture with nano banana of a desert oasis",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["run_terminal_command"]
+  },
+  {
+    "id": "img_cover_art",
+    "user": "create cover art for a cybersecurity course",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["ssh_command", "deploy"]
+  },
+  {
+    "id": "img_ui_mockup",
+    "user": "generate an image mockup of a login page",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["ssh_command"]
+  },
+  {
+    "id": "img_not_document",
+    "user": "Generate a picture of mountains at sunset",
+    "expect_route": "agent_task",
+    "expect_pack": "image",
+    "must_call": ["generate_image"],
+    "must_not_call": ["generate_pdf", "generate_docx"]
+  }
+]
