@@ -151,6 +151,18 @@ class Settings(BaseSettings):
     # complex_qa | always_qa | never
     cloud_llm_for: str = "complex_qa"
 
+    # ── ProviderRouter (Phase 3) ──────────────────────────────────────────
+    # API keys for cloud LLM providers. Stored in OS Keychain on desktop;
+    # can also be set via environment variables for server deployments.
+    anthropic_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    # Provider priority chain (comma-separated). Default: claude,openai,gemini,ollama
+    provider_priority: str = "claude,openai,gemini,ollama"
+    # Seconds before a failed provider is retried (base; doubles on each failure)
+    provider_backoff_seconds: int = 60
+    # Max backoff cap in seconds
+    provider_backoff_max_seconds: int = 600
+
     # Phase C — embedding semantic refine (uses nomic-embed when available).
     semantic_router_enabled: bool = True
 

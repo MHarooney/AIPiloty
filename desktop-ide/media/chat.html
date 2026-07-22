@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src 'unsafe-inline'; img-src {{cspSource}} data:;" />
+  <title>Chat</title>
+  <style>
+    :root {
+      --bg: var(--vscode-sideBar-background, #181818);
+      --fg: var(--vscode-foreground, #cccccc);
+      --muted: var(--vscode-descriptionForeground, #9d9d9d);
+      --border: var(--vscode-panel-border, #2b2b2b);
+      --input-bg: var(--vscode-input-background, #313131);
+      --input-fg: var(--vscode-input-foreground, #cccccc);
+      --btn-bg: var(--vscode-button-background, #0e639c);
+      --btn-fg: var(--vscode-button-foreground, #fff);
+      --btn-hover: var(--vscode-button-hoverBackground, #1177bb);
+      --list-hover: var(--vscode-list-hoverBackground, #2a2d2e);
+      --widget: var(--vscode-editorWidget-background, #252526);
+      --accent: var(--vscode-focusBorder, #007fd4);
+      --warn: var(--vscode-editorWarning-foreground, #cca700);
+      --error: var(--vscode-errorForeground, #f48771);
+      --ok: var(--vscode-testing-iconPassed, #73c991);
+      --dropdown: var(--vscode-dropdown-background, #252526);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: 13px;
+      color: var(--fg);
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+    #header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; border-bottom: 1px solid var(--border); min-height: 36px;
+    }
+    #header h1 {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--muted); flex: 1;
+    }
+    .icon-btn {
+      background: transparent; border: none; color: var(--muted);
+      cursor: pointer; padding: 4px 6px; border-radius: 4px; font-size: 12px;
+    }
+    .icon-btn:hover { background: var(--list-hover); color: var(--fg); }
+
+    #ctx {
+      display: none; padding: 6px 12px; font-size: 11px; color: var(--muted);
+      border-bottom: 1px solid var(--border); gap: 8px; align-items: center; flex-wrap: wrap;
+    }
+    #ctx.visible { display: flex; }
+    #ctx .chip {
+      background: var(--widget); border: 1px solid var(--border); border-radius: 12px;
+      padding: 2px 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    #messages {
+      flex: 1; overflow-y: auto; padding: 12px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    #empty {
+      margin: auto; text-align: center; max-width: 300px; color: var(--muted); padding: 24px 8px;
+    }
+    #empty h2 { color: var(--fg); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    #empty p { font-size: 12px; line-height: 1.5; margin-bottom: 16px; }
+    .suggestions { display: flex; flex-direction: column; gap: 6px; }
+    .suggestion {
+      text-align: left; background: var(--widget); border: 1px solid var(--border);
+      color: var(--fg); border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer;
+    }
+    .suggestion:hover { border-color: var(--accent); }
+
+    .msg .role { font-size: 11px; font-weight: 600; margin-bottom: 4px; color: var(--muted); }
+    .msg.user .role { color: var(--accent); }
+    .msg .body { line-height: 1.55; font-size: 13px; word-wrap: break-word; }
+    .msg.user .body {
+      background: var(--widget); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 10px;
+    }
+    .msg.assistant .body pre {
+      background: var(--widget); border: 1px solid var(--border); border-radius: 6px;
+      padding: 8px; overflow-x: auto; margin: 6px 0;
+      font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px;
+    }
+
+    .tool-card {
+      align-self: stretch; background: var(--widget); border: 1px solid var(--border);
+      border-radius: 8px; overflow: hidden; font-size: 12px;
+    }
+    .tool-card header {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+    }
+    .tool-card header .name { font-weight: 600; flex: 1; }
+    .tool-card header .status { font-size: 10px; color: var(--muted); }
+    .tool-card.running header .status { color: var(--warn); }
+    .tool-card.ok header .status { color: var(--ok); }
+    .tool-card.err header .status { color: var(--error); }
+    .tool-card .body {
+      display: none; padding: 8px 10px; max-height: 180px; overflow: auto;
+      font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+      white-space: pre-wrap; color: var(--muted); font-size: 11px;
+    }
+    .tool-card.open .body { display: block; }
+    .plan-card {
+      background: var(--widget); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; font-size: 12px;
+    }
+    .plan-card h3 { font-size: 12px; margin-bottom: 8px; color: var(--fg); }
+    .plan-card li { margin: 4px 0 4px 16px; color: var(--muted); }
+
+    #composer {
+      border-top: 1px solid var(--border); padding: 10px 12px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #composer-box {
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px;
+      position: relative;
+    }
+    #composer-box:focus-within { border-color: var(--accent); }
+    #input {
+      width: 100%; background: transparent; border: none; color: var(--input-fg);
+      font: inherit; resize: none; min-height: 44px; max-height: 140px; outline: none; line-height: 1.45;
+    }
+    #composer-actions { display: flex; align-items: center; gap: 8px; position: relative; }
+    #mode-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: transparent; border: 1px solid var(--border); color: var(--fg);
+      border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-family: inherit;
+    }
+    #mode-btn:hover { background: var(--list-hover); }
+    #mode-menu {
+      display: none; position: absolute; bottom: 36px; left: 0; min-width: 220px;
+      background: var(--dropdown); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 20; padding: 4px; overflow: hidden;
+    }
+    #mode-menu.open { display: block; }
+    .mode-item {
+      display: flex; align-items: flex-start; gap: 8px; width: 100%;
+      background: transparent; border: none; color: var(--fg); text-align: left;
+      padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: inherit;
+    }
+    .mode-item:hover { background: var(--list-hover); }
+    .mode-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+    .mode-item .check { width: 14px; color: var(--accent); }
+    .mode-item .meta { display: flex; flex-direction: column; gap: 2px; }
+    .mode-item .title { font-size: 12px; font-weight: 600; }
+    .mode-item .desc { font-size: 11px; color: var(--muted); }
+    #mcp-link, #send, #stop {
+      border: none; border-radius: 6px; padding: 5px 10px; font-size: 12px;
+      cursor: pointer; font-family: inherit;
+    }
+    #mcp-link {
+      margin-left: auto; background: transparent; color: var(--muted); border: 1px solid var(--border);
+    }
+    #mcp-link:hover { color: var(--fg); background: var(--list-hover); }
+    #send { background: var(--btn-bg); color: var(--btn-fg); }
+    #send:hover { background: var(--btn-hover); }
+    #send:disabled { opacity: 0.45; cursor: not-allowed; }
+    #stop { display: none; background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    body.streaming #send { display: none; }
+    body.streaming #stop { display: inline-block; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>Chat</h1>
+    <button class="icon-btn" id="open-mcp" title="MCP Servers">MCP</button>
+    <button class="icon-btn" id="new-chat" title="New Chat">＋</button>
+  </div>
+
+  <div id="ctx"><span class="chip" id="ctx-chip"></span></div>
+
+  <div id="messages">
+    <div id="empty">
+      <h2>AIPiloty</h2>
+      <p>Cursor-style modes: Agent · Ask · Plan · Debug. Tools and MCP run through your local backend.</p>
+      <div class="suggestions">
+        <button class="suggestion" data-q="Explain this project structure">Explain this project</button>
+        <button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX">Plan: improve chat UX</button>
+        <button class="suggestion" data-q="Debug why the backend only uses Ollama">Debug provider chain</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="composer">
+    <div id="composer-box">
+      <textarea id="input" rows="2" placeholder="Describe a task for the agent…"></textarea>
+      <div id="composer-actions">
+        <button id="mode-btn" type="button" aria-haspopup="menu">∞ Agent ▾</button>
+        <div id="mode-menu" role="menu">
+          <button class="mode-item active" data-mode="agent">
+            <span class="check">✓</span>
+            <span class="meta"><span class="title">∞ Agent</span><span class="desc">Tools, terminal, file edits</span></span>
+          </button>
+          <button class="mode-item" data-mode="ask">
+            <span class="check"></span>
+            <span class="meta"><span class="title">Ask</span><span class="desc">Answers only — no tools</span></span>
+          </button>
+          <button class="mode-item" data-mode="plan">
+            <span class="check"></span>
+            <span class="meta"><span class="title">Plan</span><span class="desc">Step-by-step plan before edits</span></span>
+          </button>
+          <button class="mode-item" data-mode="debug">
+            <span class="check"></span>
+            <span class="meta"><span class="title">Debug</span><span class="desc">Investigate errors & root cause</span></span>
+          </button>
+        </div>
+        <button id="mcp-link" type="button">MCP</button>
+        <button id="send">Send</button>
+        <button id="stop">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    let mode = 'agent';
+    let streaming = false;
+    let assistantEl = null;
+    let tokens = '';
+    let activeToolCard = null;
+
+    const modeLabels = {
+      agent: '∞ Agent ▾',
+      ask: 'Ask ▾',
+      plan: 'Plan ▾',
+      debug: 'Debug ▾',
+    };
+    const placeholders = {
+      agent: 'Describe a task for the agent…',
+      ask: 'Ask a question…',
+      plan: 'What should we plan?',
+      debug: 'What is broken? Paste errors…',
+    };
+
+    function setMode(m) {
+      mode = m;
+      document.getElementById('mode-btn').textContent = modeLabels[m] || m;
+      document.getElementById('input').placeholder = placeholders[m] || 'Ask…';
+      document.querySelectorAll('.mode-item').forEach((b) => {
+        const on = b.dataset.mode === m;
+        b.classList.toggle('active', on);
+        b.querySelector('.check').textContent = on ? '✓' : '';
+      });
+      document.getElementById('mode-menu').classList.remove('open');
+    }
+
+    const modeBtn = document.getElementById('mode-btn');
+    const modeMenu = document.getElementById('mode-menu');
+    modeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      modeMenu.classList.toggle('open');
+    });
+    document.querySelectorAll('.mode-item').forEach((b) => {
+      b.addEventListener('click', () => setMode(b.dataset.mode));
+    });
+    document.addEventListener('click', () => modeMenu.classList.remove('open'));
+
+    document.querySelectorAll('.suggestion').forEach((b) => {
+      b.addEventListener('click', () => {
+        document.getElementById('input').value = b.dataset.q;
+        send();
+      });
+    });
+    document.getElementById('new-chat').onclick = () => vscode.postMessage({ type: 'newSession' });
+    document.getElementById('open-mcp').onclick = () => vscode.postMessage({ type: 'openMcp' });
+    document.getElementById('mcp-link').onclick = () => vscode.postMessage({ type: 'openMcp' });
+    document.getElementById('send').onclick = send;
+    document.getElementById('stop').onclick = () => vscode.postMessage({ type: 'cancel' });
+
+    const input = document.getElementById('input');
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+      requestAnimationFrame(() => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+      });
+    });
+
+    function hideEmpty() {
+      const empty = document.getElementById('empty');
+      if (empty) empty.remove();
+    }
+
+    function send() {
+      const text = input.value.trim();
+      if (!text || streaming) return;
+      hideEmpty();
+      input.value = '';
+      input.style.height = '44px';
+      appendUser(text);
+      vscode.postMessage({ type: 'send', text, mode });
+    }
+
+    function appendUser(text) {
+      const el = document.createElement('div');
+      el.className = 'msg user';
+      el.innerHTML = '<div class="role">You</div><div class="body"></div>';
+      el.querySelector('.body').textContent = text;
+      document.getElementById('messages').appendChild(el);
+      scroll();
+    }
+
+    function startAssistant() {
+      assistantEl = document.createElement('div');
+      assistantEl.className = 'msg assistant';
+      assistantEl.innerHTML = '<div class="role">AIPiloty</div><div class="body"></div>';
+      document.getElementById('messages').appendChild(assistantEl);
+      tokens = '';
+      setStreaming(true);
+      scroll();
+    }
+
+    function looksLikeToolJson(text) {
+      const t = text.trim();
+      return t.startsWith('{') && (t.includes('"success"') || t.includes('"output"') || t.includes('needs_model_choice'));
+    }
+
+    function appendToken(t) {
+      if (!assistantEl) startAssistant();
+      tokens += t;
+      // Avoid dumping raw tool JSON into the transcript
+      if (looksLikeToolJson(tokens) && tokens.length < 4000) {
+        assistantEl.querySelector('.body').innerHTML =
+          '<em style="color:var(--muted)">Working with tools…</em>';
+      } else {
+        assistantEl.querySelector('.body').innerHTML = md(tokens);
+      }
+      scroll();
+    }
+
+    function toolCard(tool, state, detail) {
+      if (state === 'start') {
+        activeToolCard = document.createElement('div');
+        activeToolCard.className = 'tool-card running';
+        activeToolCard.innerHTML =
+          '<header><span class="name"></span><span class="status">Running…</span></header><div class="body"></div>';
+        activeToolCard.querySelector('.name').textContent = tool || 'tool';
+        activeToolCard.querySelector('header').onclick = () => activeToolCard.classList.toggle('open');
+        document.getElementById('messages').appendChild(activeToolCard);
+        scroll();
+        return;
+      }
+      const card = activeToolCard || document.createElement('div');
+      if (!activeToolCard) {
+        card.className = 'tool-card';
+        card.innerHTML =
+          '<header><span class="name"></span><span class="status"></span></header><div class="body"></div>';
+        card.querySelector('.name').textContent = tool || 'tool';
+        card.querySelector('header').onclick = () => card.classList.toggle('open');
+        document.getElementById('messages').appendChild(card);
+      }
+      card.classList.remove('running');
+      card.classList.add(state === 'error' ? 'err' : 'ok');
+      card.querySelector('.status').textContent = state === 'error' ? 'Failed' : 'Done';
+      if (detail) {
+        let pretty = String(detail);
+        try {
+          const parsed = JSON.parse(pretty);
+          // Prefer human summary over raw success blobs
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.output && parsed.output.message) pretty = parsed.output.message;
+            else if (parsed.message) pretty = parsed.message;
+            else pretty = JSON.stringify(parsed, null, 2);
+          }
+        } catch { /* keep raw */ }
+        card.querySelector('.body').textContent = pretty.slice(0, 4000);
+      }
+      activeToolCard = null;
+      scroll();
+    }
+
+    function planCard(steps) {
+      const el = document.createElement('div');
+      el.className = 'plan-card';
+      const list = (steps || []).map((s) => {
+        const label = typeof s === 'string' ? s : (s.title || s.text || JSON.stringify(s));
+        return '<li>' + escapeHtml(String(label)) + '</li>';
+      }).join('');
+      el.innerHTML = '<h3>Plan</h3><ol>' + list + '</ol>';
+      document.getElementById('messages').appendChild(el);
+      scroll();
+    }
+
+    function setStreaming(v) {
+      streaming = v;
+      document.body.classList.toggle('streaming', v);
+      document.getElementById('send').disabled = v;
+    }
+
+    function scroll() {
+      const m = document.getElementById('messages');
+      m.scrollTop = m.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function md(text) {
+      return escapeHtml(text)
+        .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      switch (msg.type) {
+        case 'token':
+          hideEmpty();
+          appendToken(msg.token || '');
+          if (msg.done) { setStreaming(false); assistantEl = null; tokens = ''; }
+          break;
+        case 'thinking':
+          hideEmpty();
+          if (!assistantEl) startAssistant();
+          break;
+        case 'planning':
+          if (Array.isArray(msg.steps) && msg.steps.length) planCard(msg.steps);
+          break;
+        case 'tool_start':
+          toolCard(msg.tool, 'start');
+          break;
+        case 'tool_output':
+          toolCard(msg.tool, 'ok', msg.output);
+          break;
+        case 'tool_error':
+          toolCard(msg.tool, 'error', msg.error);
+          break;
+        case 'approval_required':
+          toolCard(msg.tool || 'tool', 'start');
+          if (activeToolCard) {
+            activeToolCard.classList.remove('running');
+            activeToolCard.querySelector('.status').textContent = 'Needs approval';
+            activeToolCard.querySelector('.body').textContent =
+              (msg.explanation || '') + '\n' + JSON.stringify(msg.args || {}, null, 2);
+            activeToolCard.classList.add('open');
+          }
+          break;
+        case 'provider_switched':
+          break;
+        case 'error':
+          setStreaming(false);
+          toolCard('error', 'error', msg.message || 'Error');
+          break;
+        case 'done':
+          setStreaming(false);
+          assistantEl = null;
+          tokens = '';
+          break;
+        case 'newSession':
+          document.getElementById('messages').innerHTML =
+            '<div id="empty"><h2>AIPiloty</h2><p>Agent · Ask · Plan · Debug</p>' +
+            '<div class="suggestions">' +
+            '<button class="suggestion" data-q="Explain this project structure">Explain this project</button>' +
+            '<button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX">Plan: improve chat UX</button>' +
+            '<button class="suggestion" data-q="Debug why the backend only uses Ollama">Debug provider chain</button>' +
+            '</div></div>';
+          document.querySelectorAll('.suggestion').forEach((b) => {
+            b.addEventListener('click', () => {
+              document.getElementById('input').value = b.dataset.q;
+              send();
+            });
+          });
+          assistantEl = null;
+          tokens = '';
+          setStreaming(false);
+          break;
+        case 'externalSend':
+          hideEmpty();
+          appendUser(msg.text || '');
+          break;
+        case 'context':
+          if (msg.filename) {
+            document.getElementById('ctx').classList.add('visible');
+            let t = msg.filename;
+            if (msg.language) t += ' · ' + msg.language;
+            if (msg.selection) t += ' · selection';
+            document.getElementById('ctx-chip').textContent = t;
+          }
+          break;
+      }
+    });
+
+    setMode('agent');
+    vscode.postMessage({ type: 'ready' });
+  </script>
+</body>
+</html>

@@ -181,6 +181,9 @@ async def chat_stream(
 
                 if event.event == "token" and isinstance(event.data, dict):
                     full_response += event.data.get("token", "")
+                elif event.event in ("provider_switched", "provider_health"):
+                    # ProviderRouter meta-events — pass through to renderer, don't persist
+                    pass
                 elif event.event == "tool_start":
                     tool_calls_data.append(event.data)
                     await metrics.increment("tool_calls")

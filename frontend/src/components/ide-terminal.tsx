@@ -1,33 +1,21 @@
 "use client";
 
 /**
- * IDETerminal — Integrated terminal panel for the Code Editor.
- *
- * Sends commands to the AIPiloty backend `run_terminal_command` tool via
- * the workspace terminal API and streams output.  Looks and feels like the
- * VS Code / Cursor bottom terminal panel.
- *
- * Features:
- *  • Command history (↑/↓)
- *  • Coloured ANSI-stripped output
- *  • Working directory tracking
- *  • Clear button
- *  • Resizable height (drag handle)
+ * IDETerminal — Integrated terminal panel for the browser Code Editor.
+ * Sends commands to the AIPiloty backend workspace/terminal endpoint.
  */
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Terminal, X, ChevronDown, ChevronUp, Trash2, Copy, Check, Loader2 } from "lucide-react";
+import { Terminal, X, Trash2, Copy, Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { headers as apiHeaders } from "@/lib/api-headers";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100/api/v1";
 
-// Strip ANSI escape codes for display
 function stripAnsi(str: string): string {
   return str.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "").replace(/\x1B\][^\x07]*\x07/g, "");
 }
 
-// Colour-code output lines
 function lineClass(line: string): string {
   const l = line.toLowerCase();
   if (l.includes("error") || l.includes("failed") || l.includes("fatal")) return "text-red-400";
@@ -68,12 +56,10 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
   const inputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef({ active: false, startY: 0, startH: 0 });
 
-  // Auto-scroll to bottom
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
   }, [lines]);
 
-  // Drag-to-resize
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!dragRef.current.active) return;
@@ -83,11 +69,14 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
     const onUp = () => { dragRef.current.active = false; };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
   }, []);
 
   const addLine = (type: TerminalLine["type"], text: string, exit_code?: number) =>
-    setLines(prev => [...prev, mkLine(type, text, exit_code)]);
+    setLines((prev) => [...prev, mkLine(type, text, exit_code)]);
 
   const runCommand = async () => {
     const cmd = input.trim();
@@ -96,7 +85,7 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
     addLine("command", `$ ${cmd}`);
     setInput("");
     setHistoryIdx(-1);
-    setHistory(prev => [cmd, ...prev.slice(0, 49)]);
+    setHistory((prev) => [cmd, ...prev.slice(0, 49)]);
     setRunning(true);
 
     try {
@@ -116,12 +105,8 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
       const stderr = stripAnsi(data.stderr || "");
       const exit_code = data.exit_code ?? 0;
 
-      if (stdout) {
-        stdout.split("\n").filter(Boolean).forEach(l => addLine("output", l));
-      }
-      if (stderr) {
-        stderr.split("\n").filter(Boolean).forEach(l => addLine("error", l));
-      }
+      if (stdout) stdout.split("\n").filter(Boolean).forEach((l: string) => addLine("output", l));
+      if (stderr) stderr.split("\n").filter(Boolean).forEach((l: string) => addLine("error", l));
       if (!stdout && !stderr) {
         addLine("info", exit_code === 0 ? "✓ Done" : `✗ Exited with code ${exit_code}`);
       }
@@ -156,7 +141,7 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
   };
 
   const copyAll = () => {
-    const text = lines.map(l => l.text).join("\n");
+    const text = lines.map((l) => l.text).join("\n");
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -168,7 +153,6 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
       className="flex flex-col border-t border-zinc-800 bg-zinc-950 select-none"
       style={{ height }}
     >
-      {/* Drag handle */}
       <div
         className="h-1 cursor-row-resize bg-zinc-800 hover:bg-blue-600 transition-colors flex-shrink-0"
         onMouseDown={(e) => {
@@ -176,7 +160,6 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
         }}
       />
 
-      {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/80 flex-shrink-0">
         <Terminal size={13} className="text-zinc-400" />
         <span className="text-xs font-medium text-zinc-400">Terminal</span>
@@ -207,7 +190,6 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
         </div>
       </div>
 
-      {/* Output area */}
       <div
         ref={outputRef}
         onClick={() => inputRef.current?.focus()}
@@ -236,7 +218,6 @@ export default function IDETerminal({ workspacePath, onClose }: IDETerminalProps
         )}
       </div>
 
-      {/* Input row */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-t border-zinc-800 bg-zinc-900/50 flex-shrink-0">
         <span className="text-blue-400 font-mono text-[12px] select-none">$</span>
         <input

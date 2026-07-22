@@ -1,0 +1,72 @@
+{
+  "_comment": "AIPiloty IDE \u2014 product.json overrides for Code OSS fork",
+  "_comment2": "This file REPLACES the product.json in the microsoft/vscode clone.",
+  "_comment3": "See: https://github.com/microsoft/vscode/blob/main/product.json",
+  "nameShort": "AIPiloty",
+  "nameLong": "AIPiloty IDE",
+  "applicationName": "aipiloty",
+  "dataFolderName": ".aipiloty",
+  "win32MutexName": "aipilotymutex",
+  "win32DirName": "AIPiloty IDE",
+  "win32NameVersion": "AIPiloty IDE",
+  "win32RegValueName": "AIPilotyIDE",
+  "win32AppId": "{{B9A4E0F6-3B9C-4D2A-A912-8F3CF2B47E21}",
+  "win32x64AppId": "{{C1A5F1G7-4C0D-5E3B-B023-9G4DG3C58F32}",
+  "win32arm64AppId": "{{D2B6G2H8-5D1E-6F4C-C134-0H5EH4D69G43}",
+  "win32UserAppId": "{{E3C7H3I9-6E2F-7G5D-D245-1I6FI5E70H54}",
+  "win32x64UserAppId": "{{F4D8I4J0-7F3G-8H6E-E356-2J7GJ6F81I65}",
+  "win32arm64UserAppId": "{{G5E9J5K1-8G4H-9I7F-F467-3K8HK7G92J76}",
+  "win32ShellNameShort": "AIPiloty",
+  "darwinBundleIdentifier": "com.aipiloty.desktop",
+  "urlProtocol": "aipiloty",
+  "formatTrailingNewlines": true,
+  "extensionEnabledApiProposals": {
+    "aipiloty.aipiloty-desktop-ide": [
+      "defaultChatParticipant",
+      "chatParticipantAdditions",
+      "chatProvider"
+    ]
+  },
+  "builtInExtensions": [],
+  "webEndpointUrlTemplate": "https://{{uuid}}.vscode-cdn.net/stable/{{commit}}/",
+  "licenseName": "MIT",
+  "licenseUrl": "https://github.com/MHarooney/AIPiloty/blob/main/LICENSE",
+  "serverApplicationName": "aipiloty-server",
+  "serverDataFolderName": ".aipiloty-server",
+  "tunnelApplicationName": "aipiloty-tunnel",
+  "extensionAllowedProposedApi": [
+    "aipiloty.aipiloty-desktop-ide"
+  ],
+  "extensionsGallery": {
+    "_comment": "Use Open VSX (open-source gallery) \u2014 no Microsoft account needed",
+    "serviceUrl": "https://open-vsx.org/vscode/gallery",
+    "cacheUrl": "https://open-vsx.org/vscode/gallery",
+    "itemUrl": "https://open-vsx.org/vscode/item",
+    "resourceUrlTemplate": "https://open-vsx.org/vscode/asset/{publisher}/{name}/{version}/Microsoft.VisualStudio.Code.WebResources/{path}",
+    "controlUrl": ""
+  },
+  "updateUrl": "",
+  "downloadUrl": "https://github.com/MHarooney/AIPiloty/releases",
+  "releaseNotesUrl": "https://github.com/MHarooney/AIPiloty/releases",
+  "reportIssueUrl": "https://github.com/MHarooney/AIPiloty/issues",
+  "requestFeatureUrl": "https://github.com/MHarooney/AIPiloty/issues",
+  "privacyStatementUrl": "",
+  "enableTelemetry": false,
+  "aiConfig": {},
+  "crashReporter": {
+    "companyName": "AIPiloty",
+    "productName": "AIPiloty IDE"
+  },
+  "documentationUrl": "https://github.com/MHarooney/AIPiloty",
+  "keyboardShortcutsUrlMac": "https://github.com/MHarooney/AIPiloty",
+  "keyboardShortcutsUrlLinux": "https://github.com/MHarooney/AIPiloty",
+  "keyboardShortcutsUrlWin": "https://github.com/MHarooney/AIPiloty",
+  "introductoryVideosUrl": "",
+  "tipsAndTricksUrl": "https://github.com/MHarooney/AIPiloty",
+  "newsletterSignupUrl": "",
+  "quality": "stable",
+  "commit": "aipiloty-dev",
+  "date": "2026-07-22",
+  "settingsSearchUrl": "",
+  "experimentsUrl": ""
+}

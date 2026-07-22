@@ -723,6 +723,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
 
+      case "provider_switched":
+        // ProviderRouter switched LLM provider mid-session — show in background logs
+        set((s) => ({
+          backgroundLogs: [
+            ...s.backgroundLogs.slice(-99),
+            {
+              id: newId(),
+              level: "warn" as const,
+              message: `LLM switched: ${data.from} → ${data.to} (reason: ${data.reason})`,
+              timestamp: Date.now(),
+            },
+          ],
+        }));
+        break;
+
+      case "provider_health":
+        // ProviderRouter emitting health update — log silently
+        set((s) => ({
+          backgroundLogs: [
+            ...s.backgroundLogs.slice(-99),
+            {
+              id: newId(),
+              level: "info" as const,
+              message: `Provider ${data.provider}: ${data.available ? "available" : `backoff ${data.backoff_seconds}s`}`,
+              timestamp: Date.now(),
+            },
+          ],
+        }));
+        break;
+
       case "error":
         if (!state.isStreaming) {
           state.startAssistantMessage();

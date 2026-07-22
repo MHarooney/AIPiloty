@@ -21,6 +21,37 @@ class ConfigUpdate(BaseModel):
     ollama_model: Optional[str] = None
     ollama_temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     ollama_context_length: Optional[int] = Field(None, ge=512, le=131072)
+    # LLM provider API keys — write-only. Never returned by GET.
+    # Pass a non-empty key to set; pass "" to clear.
+    anthropic_api_key: Optional[str] = Field(None, max_length=512)
+    openai_api_key: Optional[str] = Field(None, max_length=512)
+    gemini_api_key: Optional[str] = Field(None, max_length=512)
+    # Provider priority chain (comma-separated, e.g. "claude,openai,gemini,ollama")
+    provider_priority: Optional[str] = None
+
+
+def _key_hint(value: Optional[str]) -> Optional[str]:
+    """Return a safe masked hint like '…abcd' — never the full key."""
+    if not value or not str(value).strip():
+        return None
+    s = str(value).strip()
+    if len(s) <= 4:
+        return "••••"
+    return f"…{s[-4:]}"
+
+
+def _apply_llm_key(settings_obj, attr: str, raw: Optional[str]) -> str:
+    """Set or clear a settings API-key attribute. Returns 'set' | 'cleared'."""
+    if raw is None:
+        return "unchanged"
+    cleaned = raw.strip()
+    if cleaned == "":
+        setattr(settings_obj, attr, None)
+        return "cleared"
+    if len(cleaned) < 8:
+        raise HTTPException(status_code=400, detail=f"{attr} looks too short")
+    setattr(settings_obj, attr, cleaned)
+    return "set"
 
 
 class ServiceToggle(BaseModel):
@@ -53,6 +84,10 @@ async def get_config(identity: str = Depends(require_auth)):
                 "risk_level": t.risk_level,
             })
 
+    router_obj = app_state.get("provider_router")
+    chain = [a.name for a in router_obj.chain] if router_obj else ["ollama"]
+    active = router_obj.active_provider if router_obj else "ollama"
+
     return {
         "app_name": settings.app_name,
         "app_env": settings.app_env,
@@ -65,6 +100,30 @@ async def get_config(identity: str = Depends(require_auth)):
         "deploypilot_kb_url": settings.deploypilot_kb_url or "Not configured",
         "cors_origins": settings.cors_origins if hasattr(settings, "cors_origins") else ["http://localhost:3000", "http://localhost:3001"],
         "tools_registered": tools,
+        # LLM chat providers — status only, never raw secrets
+        "llm_providers": {
+            "priority": settings.provider_priority,
+            "active": active,
+            "chain": chain,
+            "providers": {
+                "claude": {
+                    "configured": bool((settings.anthropic_api_key or "").strip()),
+                    "key_hint": _key_hint(settings.anthropic_api_key),
+                },
+                "openai": {
+                    "configured": bool((settings.openai_api_key or "").strip()),
+                    "key_hint": _key_hint(settings.openai_api_key),
+                },
+                "gemini": {
+                    "configured": bool((settings.gemini_api_key or "").strip()),
+                    "key_hint": _key_hint(settings.gemini_api_key),
+                },
+                "ollama": {
+                    "configured": True,
+                    "key_hint": None,
+                },
+            },
+        },
     }
 
 
@@ -72,6 +131,8 @@ async def get_config(identity: str = Depends(require_auth)):
 async def update_config(body: ConfigUpdate, identity: str = Depends(require_auth)):
     """Update runtime-configurable settings (no restart required)."""
     updated = {}
+    settings = get_settings()
+
     if body.ollama_model is not None:
         _runtime_overrides["ollama_model"] = body.ollama_model
         updated["ollama_model"] = body.ollama_model
@@ -81,6 +142,40 @@ async def update_config(body: ConfigUpdate, identity: str = Depends(require_auth
     if body.ollama_context_length is not None:
         _runtime_overrides["ollama_context_length"] = body.ollama_context_length
         updated["ollama_context_length"] = body.ollama_context_length
+
+    # LLM provider API keys — hot-patch settings + rebuild ProviderRouter chain
+    _llm_keys_changed = False
+    for _attr, _raw in (
+        ("anthropic_api_key", body.anthropic_api_key),
+        ("openai_api_key", body.openai_api_key),
+        ("gemini_api_key", body.gemini_api_key),
+    ):
+        if _raw is not None:
+            status = _apply_llm_key(settings, _attr, _raw)
+            updated[_attr] = status
+            _llm_keys_changed = True
+    if body.provider_priority is not None:
+        cleaned_priority = body.provider_priority.strip()
+        if not cleaned_priority:
+            raise HTTPException(status_code=400, detail="provider_priority cannot be empty")
+        settings.provider_priority = cleaned_priority
+        updated["provider_priority"] = cleaned_priority
+        _llm_keys_changed = True
+
+    # Rebuild ProviderRouter if LLM keys changed
+    if _llm_keys_changed:
+        from ...main import app_state
+        from ...services.llm.provider_router import build_router_sync
+        orchestrator = app_state.get("orchestrator")
+        new_router = build_router_sync()
+        app_state["provider_router"] = new_router
+        if orchestrator is not None:
+            orchestrator._router = new_router
+        logger.info(
+            "ProviderRouter rebuilt: chain=%s",
+            [a.name for a in new_router.chain],
+        )
+        updated["provider_chain"] = [a.name for a in new_router.chain]
 
     return {"success": True, "updated": updated}
 

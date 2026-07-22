@@ -25,6 +25,7 @@ from .services.agent.guardrails import GuardrailService
 from .services.agent.memory import AgentMemory
 from .services.agent.orchestrator import AgentOrchestrator
 from .services.llm.ollama_service import OllamaService
+from .services.llm.provider_router import build_router_sync
 from .services.ssh.executor import SSHExecutor
 from .services.tools.documents.generator_service import DocumentGeneratorService
 from .services.tools.documents.tools import (
@@ -305,6 +306,16 @@ async def lifespan(app: FastAPI):
     agent_memory = AgentMemory(storage_path="data/agent_memory.json")
 
     # Agent orchestrator
+    # Build ProviderRouter — includes all providers with configured API keys.
+    # Falls back to Ollama-only if no cloud keys are set.
+    provider_router = build_router_sync()
+    app_state["provider_router"] = provider_router
+    logger.info(
+        "ProviderRouter: %d provider(s) configured — chain: %s",
+        len(provider_router.chain),
+        " → ".join(a.name for a in provider_router.chain),
+    )
+
     orchestrator = AgentOrchestrator(
         llm, registry, guardrails,
         get_all_vms_func=get_all_vms,
@@ -312,6 +323,7 @@ async def lifespan(app: FastAPI):
         memory=agent_memory,
         evaluator=self_evaluator,     # Phase 2: self-correction
         episodic_store=episodic_store, # Phase 3: episodic memory
+        provider_router=provider_router,  # Phase 3: multi-provider failover
     )
     app_state["agent_memory"] = agent_memory
 

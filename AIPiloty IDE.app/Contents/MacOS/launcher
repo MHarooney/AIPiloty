@@ -1,0 +1,16 @@
+#!/bin/bash
+# AIPiloty IDE.app → launches Code OSS fork via scripts/launch-desktop-ide.sh
+# Keep this .app inside aipiloty/; install to Applications via symlink only.
+
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+SCRIPT="$ROOT/scripts/launch-desktop-ide.sh"
+
+if [[ ! -f "$SCRIPT" ]]; then
+  osascript -e 'display dialog "AIPiloty IDE could not find its project. Keep \"AIPiloty IDE.app\" inside the aipiloty folder (next to code-oss-ide/), then re-run: make fork-app" buttons {"OK"} default button "OK" with title "AIPiloty IDE" with icon stop' 2>/dev/null || true
+  exit 1
+fi
+
+chmod +x "$SCRIPT" 2>/dev/null || true
+exec /bin/bash "$SCRIPT"

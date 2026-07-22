@@ -102,3 +102,20 @@ async def list_image_models(
     rows = await list_secrets(db)
     configured = {r.provider for r in rows if r.is_active and r.api_key_encrypted}
     return {"models": public_catalog(configured), "configured_providers": sorted(configured)}
+
+
+# ── LLM ProviderRouter health ─────────────────────────────────────────────────
+
+@router.get("/llm/health")
+async def llm_provider_health(identity: str = Depends(require_auth)):
+    """Return ProviderRouter health summary (active provider, backoffs, chain order)."""
+    from ...main import app_state
+    router_obj = app_state.get("provider_router")
+    if router_obj is None:
+        return {"active": "ollama", "chain": ["ollama"], "health": {}}
+    return {
+        "active": router_obj.active_provider,
+        "chain": [a.name for a in router_obj.chain],
+        "health": router_obj.health_summary(),
+    }
+

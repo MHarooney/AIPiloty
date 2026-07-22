@@ -46,6 +46,7 @@ class MCPServerCreate(BaseModel):
     args: list[str] = Field(default_factory=list, description="Command arguments")
     env: dict[str, str] = Field(default_factory=dict, description="Extra env vars")
     description: str = Field("", description="Optional description")
+    enabled: bool = Field(True, description="When false, Agent skips this MCP server")
 
 
 @router.get("/servers")

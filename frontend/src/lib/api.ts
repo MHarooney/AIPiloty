@@ -450,9 +450,43 @@ export async function getConfig() {
   return handleRes<any>(res);
 }
 
-export async function updateConfig(data: { ollama_model?: string; ollama_temperature?: number; ollama_context_length?: number }) {
+export async function updateConfig(data: {
+  ollama_model?: string;
+  ollama_temperature?: number;
+  ollama_context_length?: number;
+  anthropic_api_key?: string;
+  openai_api_key?: string;
+  gemini_api_key?: string;
+  provider_priority?: string;
+}) {
   const res = await fetch(`${API_BASE}/config/`, { method: "POST", headers: headers(), body: JSON.stringify(data) });
   return handleRes<{ success: boolean; updated: Record<string, unknown> }>(res);
+}
+
+export interface LlmProviderStatus {
+  configured: boolean;
+  key_hint?: string | null;
+}
+
+export interface LlmProvidersConfig {
+  priority: string;
+  active: string;
+  chain: string[];
+  providers: {
+    claude: LlmProviderStatus;
+    openai: LlmProviderStatus;
+    gemini: LlmProviderStatus;
+    ollama: LlmProviderStatus;
+  };
+}
+
+export async function getLlmProviderHealth() {
+  const res = await fetch(`${API_BASE}/providers/llm/health`, { headers: headers() });
+  return handleRes<{
+    active: string;
+    chain: string[];
+    health: Record<string, unknown>;
+  }>(res);
 }
 
 export interface ImageModelOption {

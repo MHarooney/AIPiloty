@@ -21,6 +21,12 @@ python-multipart>=0.0.7
 # LLM
 httpx>=0.27,<1.0
 
+# ProviderRouter — cloud LLM adapters (Phase 3)
+# Install as needed; all are optional (Ollama is always available)
+anthropic>=0.35,<1.0         # Claude (Anthropic)
+openai>=1.50,<2.0            # OpenAI GPT (also used for image gen)
+google-generativeai>=0.8,<1.0  # Google Gemini
+
 # RAG — vector store
 qdrant-client>=1.9,<2.0
 # RAG — Phase 1: cross-encoder reranker (lazy-loaded; ~90 MB on first use; CPU-only / Apple M2)

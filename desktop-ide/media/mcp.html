@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src 'unsafe-inline';" />
+  <title>MCP Servers</title>
+  <style>
+    :root {
+      --bg: var(--vscode-sideBar-background, #181818);
+      --fg: var(--vscode-foreground, #ccc);
+      --muted: var(--vscode-descriptionForeground, #9d9d9d);
+      --border: var(--vscode-panel-border, #2b2b2b);
+      --widget: var(--vscode-editorWidget-background, #252526);
+      --input-bg: var(--vscode-input-background, #313131);
+      --accent: var(--vscode-focusBorder, #007fd4);
+      --btn-bg: var(--vscode-button-background, #0e639c);
+      --btn-fg: var(--vscode-button-foreground, #fff);
+      --error: var(--vscode-errorForeground, #f48771);
+      --ok: var(--vscode-testing-iconPassed, #73c991);
+      --hover: var(--vscode-list-hoverBackground, #2a2d2e);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--vscode-font-family, system-ui, sans-serif);
+      font-size: 13px; color: var(--fg); background: var(--bg);
+      padding: 16px; height: 100vh; overflow: auto;
+    }
+    h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+    button {
+      font-family: inherit; font-size: 12px; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--widget); color: var(--fg);
+      padding: 6px 10px;
+    }
+    button.primary { background: var(--btn-bg); color: var(--btn-fg); border-color: var(--btn-bg); }
+    button:hover { filter: brightness(1.08); }
+    .server {
+      background: var(--widget); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; margin-bottom: 10px;
+    }
+    .server-top { display: flex; align-items: center; gap: 10px; }
+    .server-top .name { font-weight: 600; flex: 1; }
+    .server-top .tools { color: var(--muted); font-size: 11px; }
+    .toggle {
+      width: 36px; height: 20px; border-radius: 999px; border: none;
+      background: #555; position: relative; padding: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s;
+    }
+    .toggle.on::after { left: 18px; }
+    .meta { margin-top: 8px; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .tool-list {
+      margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px;
+      max-height: 160px; overflow: auto; font-size: 11px; color: var(--muted);
+    }
+    .tool-list div { padding: 3px 0; }
+    .form {
+      display: none; background: var(--widget); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; margin-bottom: 14px;
+    }
+    .form.open { display: block; }
+    .form label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 4px; }
+    .form input, .form textarea {
+      width: 100%; background: var(--input-bg); border: 1px solid var(--border);
+      color: var(--fg); border-radius: 6px; padding: 6px 8px; font: inherit;
+    }
+    .form textarea { min-height: 56px; font-family: ui-monospace, monospace; font-size: 11px; }
+    .empty { color: var(--muted); font-size: 12px; padding: 20px 0; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--error); }
+  </style>
+</head>
+<body>
+  <h1>MCP Servers</h1>
+  <p class="sub">Model Context Protocol tools for AIPiloty Agent — same idea as Cursor Settings → MCP.</p>
+
+  <div class="toolbar">
+    <button class="primary" id="btn-add">New MCP Server</button>
+    <button id="btn-import">Import JSON</button>
+    <button id="btn-refresh">Refresh</button>
+  </div>
+
+  <div class="form" id="form">
+    <label>Name</label>
+    <input id="f-name" placeholder="filesystem" />
+    <label>Command</label>
+    <input id="f-command" placeholder="npx" />
+    <label>Args (JSON array)</label>
+    <textarea id="f-args" placeholder='["-y", "@modelcontextprotocol/server-filesystem", "/path"]'></textarea>
+    <label>Env (JSON object)</label>
+    <textarea id="f-env" placeholder='{}'></textarea>
+    <label>Description</label>
+    <input id="f-desc" placeholder="Optional" />
+    <div class="actions">
+      <button class="primary" id="f-save">Save</button>
+      <button id="f-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <div class="form" id="import-form">
+    <label>Paste Claude Desktop / Cursor mcpServers JSON</label>
+    <textarea id="import-json" placeholder='{ "mcpServers": { "name": { "command": "npx", "args": [] } } }'></textarea>
+    <div class="actions">
+      <button class="primary" id="import-save">Import</button>
+      <button id="import-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <div id="list"><div class="empty">Loading…</div></div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    let servers = [];
+
+    document.getElementById('btn-refresh').onclick = () => vscode.postMessage({ type: 'refresh' });
+    document.getElementById('btn-add').onclick = () => {
+      document.getElementById('form').classList.add('open');
+      document.getElementById('import-form').classList.remove('open');
+    };
+    document.getElementById('btn-import').onclick = () => {
+      document.getElementById('import-form').classList.add('open');
+      document.getElementById('form').classList.remove('open');
+    };
+    document.getElementById('f-cancel').onclick = () => document.getElementById('form').classList.remove('open');
+    document.getElementById('import-cancel').onclick = () => document.getElementById('import-form').classList.remove('open');
+
+    document.getElementById('f-save').onclick = () => {
+      let args = [];
+      let env = {};
+      try { args = JSON.parse(document.getElementById('f-args').value.trim() || '[]'); }
+      catch { alert('Args must be a JSON array'); return; }
+      try { env = JSON.parse(document.getElementById('f-env').value.trim() || '{}'); }
+      catch { alert('Env must be a JSON object'); return; }
+      vscode.postMessage({
+        type: 'add',
+        server: {
+          name: document.getElementById('f-name').value.trim(),
+          command: document.getElementById('f-command').value.trim(),
+          args, env,
+          description: document.getElementById('f-desc').value.trim(),
+          enabled: true,
+        },
+      });
+    };
+
+    document.getElementById('import-save').onclick = () => {
+      try {
+        const cfg = JSON.parse(document.getElementById('import-json').value);
+        vscode.postMessage({ type: 'import', config: cfg });
+      } catch {
+        alert('Invalid JSON');
+      }
+    };
+
+    function render() {
+      const list = document.getElementById('list');
+      if (!servers.length) {
+        list.innerHTML = '<div class="empty">No MCP servers yet. Add one or import from Cursor / Claude Desktop.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      servers.forEach((s) => {
+        const el = document.createElement('div');
+        el.className = 'server';
+        const enabled = s.enabled !== false;
+        el.innerHTML =
+          '<div class="server-top">' +
+          '<button class="toggle ' + (enabled ? 'on' : '') + '" data-id="' + s.id + '" title="Enable/disable"></button>' +
+          '<div class="name"></div>' +
+          '<div class="tools" data-tools="' + s.id + '">—</div>' +
+          '</div>' +
+          '<div class="meta"></div>' +
+          '<div class="actions">' +
+          '<button data-probe="' + s.id + '">Refresh Tools</button>' +
+          '<button data-del="' + s.id + '">Delete</button>' +
+          '</div>' +
+          '<div class="tool-list" id="tools-' + s.id + '"></div>';
+        el.querySelector('.name').textContent = s.name;
+        el.querySelector('.meta').textContent = s.command + ' ' + (s.args || []).join(' ');
+        el.querySelector('.toggle').onclick = () => {
+          vscode.postMessage({ type: 'toggle', id: s.id, enabled: !enabled });
+        };
+        el.querySelector('[data-probe]').onclick = () => vscode.postMessage({ type: 'probe', id: s.id });
+        el.querySelector('[data-del]').onclick = () => {
+          if (confirm('Delete MCP server "' + s.name + '"?')) {
+            vscode.postMessage({ type: 'delete', id: s.id });
+          }
+        };
+        list.appendChild(el);
+      });
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg.type === 'servers') {
+        servers = msg.servers || [];
+        render();
+        document.getElementById('form').classList.remove('open');
+        document.getElementById('import-form').classList.remove('open');
+      }
+      if (msg.type === 'probeResult') {
+        const box = document.getElementById('tools-' + msg.id);
+        const badge = document.querySelector('[data-tools="' + msg.id + '"]');
+        if (msg.error) {
+          if (badge) { badge.textContent = 'error'; badge.className = 'tools status err'; }
+          if (box) box.textContent = msg.error;
+          return;
+        }
+        const tools = msg.tools || [];
+        if (badge) {
+          badge.textContent = tools.length + ' tools enabled';
+          badge.className = 'tools status ok';
+        }
+        if (box) {
+          box.innerHTML = tools.map((t) =>
+            '<div><strong>' + (t.name || '') + '</strong> — ' + (t.description || '') + '</div>'
+          ).join('') || '<div>No tools</div>';
+        }
+      }
+      if (msg.type === 'toast' && msg.message) {
+        // lightweight inline toast
+        const t = document.createElement('div');
+        t.textContent = msg.message;
+        t.style.cssText = 'position:fixed;bottom:16px;right:16px;background:var(--widget);border:1px solid var(--border);padding:8px 12px;border-radius:6px;z-index:9';
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 2500);
+      }
+    });
+
+    vscode.postMessage({ type: 'ready' });
+  </script>
+</body>
+</html>

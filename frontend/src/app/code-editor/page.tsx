@@ -21,12 +21,10 @@ import { useEditorStore } from "@/stores/editor-store";
 import { useRouter } from "next/navigation";
 import GitPanel from "@/components/git-panel";
 import EditorAIChat from "@/components/editor-ai-chat";
+import InlineEditWidget from "@/components/inline-edit-widget";
+import PerHunkDiffViewer from "@/components/per-hunk-diff-viewer";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
-const MonacoDiffEditor = dynamic(
-  () => import("@monaco-editor/react").then((mod) => ({ default: mod.DiffEditor })),
-  { ssr: false }
-);
 
 interface OpenTab {
   path: string;
@@ -74,6 +72,8 @@ export default function CodeEditorPage() {
   // Command palette
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<"ai" | "files" | "cmd">("ai");
+  // Inline edit (Cmd-K)
+  const [showInlineEdit, setShowInlineEdit] = useState(false);
 
   const sidebarDragRef = useRef({ active: false, startX: 0, startWidth: 0 });
   const aiChatDragRef = useRef({ active: false, startX: 0, startWidth: 0 });
@@ -83,6 +83,7 @@ export default function CodeEditorPage() {
   const diffProposal = useEditorStore((s) => s.diffProposal);
   const clearDiffProposal = useEditorStore((s) => s.clearDiffProposal);
   const setExplainSelection = useEditorStore((s) => s.setExplainSelection);
+  const setDiffProposal = useEditorStore((s) => s.setDiffProposal);
   const router = useRouter();
 
   /* ── Panel resize drag handlers ────────────────────────────────────── */
@@ -323,6 +324,23 @@ export default function CodeEditorPage() {
         }
       },
     });
+    // "Inline Edit (Cmd+K)" — Cursor-style
+    editor.addAction({
+      id: "inline-edit-cmd-k",
+      label: "Inline Edit with AI (Cmd+K)",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.4,
+      run: (ed: any) => {
+        const selection = ed.getSelection();
+        const selText = ed.getModel()?.getValueInRange(selection) ?? "";
+        if (selText.trim()) {
+          setShowInlineEdit(true);
+        } else {
+          toast.info("Select code first, then press Cmd+K");
+        }
+      },
+    });
     // "Edit Selection with AI" context menu action
     editor.addAction({
       id: "edit-selection-ai",
@@ -341,34 +359,6 @@ export default function CodeEditorPage() {
       },
     });
   };
-
-  const acceptDiff = useCallback(() => {
-    if (!diffProposal) return;
-    const existing = tabs.find((t) => t.path === diffProposal.filePath);
-    if (existing) {
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.path === diffProposal.filePath
-            ? { ...t, content: diffProposal.modified, dirty: diffProposal.modified !== t.savedContent }
-            : t
-        )
-      );
-      setActiveTab(diffProposal.filePath);
-    } else {
-      const newTab: OpenTab = {
-        path: diffProposal.filePath,
-        name: diffProposal.filePath.split("/").pop() || diffProposal.filePath,
-        content: diffProposal.modified,
-        savedContent: diffProposal.original,
-        language: diffProposal.language,
-        dirty: true,
-      };
-      setTabs((prev) => [...prev, newTab]);
-      setActiveTab(diffProposal.filePath);
-    }
-    clearDiffProposal();
-    toast.success("Changes applied");
-  }, [diffProposal, tabs, clearDiffProposal]);
 
   const current = tabs.find((t) => t.path === activeTab);
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
@@ -700,43 +690,47 @@ export default function CodeEditorPage() {
             </div>
           )}
 
-          {/* Editor / Diff / Placeholder */}
+          {/* Editor / Diff / Inline Edit / Placeholder */}
           {diffProposal ? (
-            <div className="flex-1 flex flex-col">
-              <div className="flex items-center gap-2 px-4 py-2 bg-amber-900/30 border-b border-amber-700/50">
-                <span className="text-xs text-amber-300">Proposed changes to <strong>{diffProposal.filePath}</strong></span>
-                <div className="ml-auto flex gap-2">
-                  <button
-                    onClick={() => clearDiffProposal()}
-                    className="px-3 py-1 text-xs rounded bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    onClick={acceptDiff}
-                    className="px-3 py-1 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-500 transition-colors"
-                  >
-                    Accept Changes
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1">
-                <MonacoDiffEditor
-                  height="100%"
-                  language={diffProposal.language}
-                  original={diffProposal.original}
-                  modified={diffProposal.modified}
-                  theme="vs-dark"
-                  options={{
-                    readOnly: true,
-                    renderSideBySide: true,
-                    fontSize: 13,
-                    scrollBeyondLastLine: false,
-                    minimap: { enabled: false },
-                  }}
-                />
-              </div>
-            </div>
+            <PerHunkDiffViewer
+              original={diffProposal.original}
+              modified={diffProposal.modified}
+              language={diffProposal.language}
+              filePath={diffProposal.filePath}
+              onFinish={(result) => {
+                if (result !== null) {
+                  // Apply merged result
+                  const existing = tabs.find((t) => t.path === diffProposal.filePath);
+                  if (existing) {
+                    setTabs((prev) =>
+                      prev.map((t) =>
+                        t.path === diffProposal.filePath
+                          ? { ...t, content: result, dirty: result !== t.savedContent }
+                          : t
+                      )
+                    );
+                    setActiveTab(diffProposal.filePath);
+                  } else {
+                    setTabs((prev) => [
+                      ...prev,
+                      {
+                        path: diffProposal.filePath,
+                        name: diffProposal.filePath.split("/").pop() || diffProposal.filePath,
+                        content: result,
+                        savedContent: diffProposal.original,
+                        language: diffProposal.language,
+                        dirty: true,
+                      },
+                    ]);
+                    setActiveTab(diffProposal.filePath);
+                  }
+                  toast.success("Changes applied");
+                } else {
+                  toast.info("Changes rejected");
+                }
+                clearDiffProposal();
+              }}
+            />
           ) : fileLoading ? (
             <div className="flex-1 flex items-center justify-center">
               <Loader2 className="animate-spin text-gray-500" size={28} />
@@ -764,6 +758,28 @@ export default function CodeEditorPage() {
                   guides: { bracketPairs: true },
                 }}
               />
+              {/* Cmd-K Inline Edit Widget — shown below Monaco */}
+              {showInlineEdit && selectedText && current && (
+                <InlineEditWidget
+                  selectedText={selectedText}
+                  language={current.language}
+                  filePath={current.path}
+                  originalFull={current.content}
+                  onClose={() => setShowInlineEdit(false)}
+                  onApply={(editedCode) => {
+                    setShowInlineEdit(false);
+                    const newContent = current.content.replace(selectedText, editedCode);
+                    const finalContent = newContent !== current.content ? newContent : editedCode;
+                    setDiffProposal({
+                      filePath: current.path,
+                      original: current.content,
+                      modified: finalContent,
+                      language: current.language,
+                    });
+                    toast.success("Edit ready — review the diff");
+                  }}
+                />
+              )}
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-600 text-sm gap-3">

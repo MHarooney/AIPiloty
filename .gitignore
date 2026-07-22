@@ -95,3 +95,14 @@ temp/
 
 # pytest shared sqlite
 backend/tests/.pytest_aipiloty.sqlite*
+
+# Code OSS fork clone (bootstrap locally — never commit)
+code-oss-ide/vscode-fork/
+code-oss-ide/**/node_modules/
+
+# Desktop IDE extension build deps
+desktop-ide/node_modules/
+desktop-ide/*.vsix
+
+# Local IDE user data / logs
+.aipiloty-ide-dev/

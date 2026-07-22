@@ -1,0 +1,291 @@
+{
+  "name": "aipiloty-desktop-ide",
+  "displayName": "AIPiloty Desktop IDE",
+  "description": "Cursor-class AI coding assistant powered by AIPiloty agent \u2014 Claude \u2192 OpenAI \u2192 Gemini \u2192 Ollama with automatic failover",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "aipiloty",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MHarooney/AIPiloty"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "enabledApiProposals": [
+    "chatParticipantAdditions",
+    "chatProvider",
+    "defaultChatParticipant"
+  ],
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "assistant",
+    "chat",
+    "ollama",
+    "claude",
+    "cursor"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "aipiloty.agent",
+        "name": "aipiloty",
+        "fullName": "AIPiloty",
+        "description": "Agent \u00b7 Ask \u00b7 Plan \u00b7 Debug (Claude \u2192 OpenAI \u2192 Gemini \u2192 Ollama)",
+        "isDefault": true,
+        "sampleRequest": "Explain the selected code and suggest improvements",
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Ask mode \u2014 explain without running tools"
+          },
+          {
+            "name": "edit",
+            "description": "Agent mode \u2014 propose and apply an edit"
+          },
+          {
+            "name": "tests",
+            "description": "Agent mode \u2014 generate tests for the selection"
+          },
+          {
+            "name": "agent",
+            "description": "Force Agent mode (tools, terminal, file edits)"
+          },
+          {
+            "name": "plan",
+            "description": "Plan mode \u2014 steps before edits"
+          },
+          {
+            "name": "debug",
+            "description": "Debug mode \u2014 investigate root cause"
+          }
+        ],
+        "locations": [
+          "panel",
+          "editing-session"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "aipiloty.inlineEdit",
+        "title": "Inline Edit Selection with AI",
+        "shortTitle": "AI Edit",
+        "category": "AIPiloty",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "aipiloty.openChat",
+        "title": "Open AIPiloty Chat",
+        "category": "AIPiloty",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aipiloty.explainSelection",
+        "title": "Explain Selection",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.setProviderKey",
+        "title": "Set API Key for Provider",
+        "category": "AIPiloty",
+        "icon": "$(key)"
+      },
+      {
+        "command": "aipiloty.restartBackend",
+        "title": "Restart AIPiloty Backend",
+        "category": "AIPiloty",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aipiloty.showProviderHealth",
+        "title": "Show Provider Health",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.newChat",
+        "title": "New Chat Session",
+        "category": "AIPiloty",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aipiloty.openMcpSettings",
+        "title": "Open MCP Servers",
+        "category": "AIPiloty",
+        "icon": "$(server-process)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "aipiloty.inlineEdit",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "editorHasSelection && !inlineSuggestionVisible"
+      },
+      {
+        "command": "aipiloty.openChat",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "aipiloty.inlineEdit",
+          "when": "editorHasSelection",
+          "group": "aipiloty@1"
+        },
+        {
+          "command": "aipiloty.explainSelection",
+          "when": "editorHasSelection",
+          "group": "aipiloty@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "aipiloty.openChat",
+          "group": "navigation@100"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "aipiloty.newChat",
+          "when": "view == aipiloty.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "aipiloty.restartBackend",
+          "when": "view == aipiloty.chatView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aipiloty-sidebar",
+          "title": "AIPiloty",
+          "icon": "media/icon-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "aipiloty-sidebar": [
+        {
+          "type": "webview",
+          "id": "aipiloty.chatView",
+          "name": "Chat",
+          "retainContextWhenHidden": true
+        },
+        {
+          "type": "webview",
+          "id": "aipiloty.mcpView",
+          "name": "MCP",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AIPiloty",
+      "properties": {
+        "aipiloty.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8100",
+          "description": "AIPiloty agent backend URL. Change only if running backend on a different port."
+        },
+        "aipiloty.autoStartBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the AIPiloty FastAPI backend when VS Code opens."
+        },
+        "aipiloty.backendPythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Python executable to use for the backend. Leave empty to auto-detect from the aipiloty/backend/.venv."
+        },
+        "aipiloty.backendDir": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the aipiloty/backend/ directory. Leave empty to auto-detect relative to this extension."
+        },
+        "aipiloty.providerPriority": {
+          "type": "string",
+          "default": "claude,openai,gemini,ollama",
+          "description": "LLM provider priority chain (comma-separated). Failover happens on the next request."
+        },
+        "aipiloty.contextLines": {
+          "type": "number",
+          "default": 50,
+          "minimum": 0,
+          "maximum": 500,
+          "description": "Lines of surrounding code to include as context for inline edits."
+        },
+        "aipiloty.theme": {
+          "type": "string",
+          "enum": [
+            "dark",
+            "light",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "AIPiloty chat panel theme."
+        },
+        "aipiloty.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "AIPiloty backend API key (must match backend API_KEY / .env). Stored in settings; prefer SecretStorage for production."
+        },
+        "aipiloty.preferredChatUi": {
+          "type": "string",
+          "enum": [
+            "sidebar",
+            "vscode"
+          ],
+          "default": "vscode",
+          "description": "Primary Chat UI: AIPiloty sidebar (VS Code\u2013style Ask/Edit/Agent) or built-in VS Code Chat panel."
+        },
+        "aipiloty.autoApproveTools": {
+          "type": "boolean",
+          "default": false,
+          "description": "Always auto-approve high-risk tools (not recommended)."
+        },
+        "aipiloty.autoApproveAgentTools": {
+          "type": "boolean",
+          "default": false,
+          "description": "In Agent mode, auto-approve high-risk tools. When false, show Approve/Deny (recommended)."
+        }
+      }
+    },
+    "languageModels": [
+      {
+        "vendor": "aipiloty"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "pretest": "npm run compile",
+    "test": "node ./dist/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.5.0"
+  }
+}

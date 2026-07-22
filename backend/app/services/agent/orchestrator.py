@@ -24,6 +24,7 @@ from typing import Any, AsyncGenerator, Optional
 from ...core.config import get_settings
 from ...core.metrics import metrics
 from ..llm.ollama_service import OllamaService
+from ..llm.provider_router import ProviderRouter
 from ..tools.base import BaseTool, ToolResult
 from ..tools.registry import ToolRegistry
 from .guardrails import GuardrailService
@@ -52,6 +53,36 @@ def _get_cached_system_prompt(tools: list[BaseTool]) -> str:
         cached = _build_system_prompt(tools)
         _SYSTEM_PROMPT_CACHE[key] = cached
     return cached
+
+
+def _load_project_rules(max_chars: int = 2000) -> str:
+    """Read .aipiloty/rules or AGENTS.md from the current workspace root.
+
+    Returns the first matching file's content (truncated to max_chars).
+    Returns empty string if neither file exists or can be read.
+    """
+    from pathlib import Path as _Path
+    from ...core.config import get_settings as _get_settings
+
+    workspace = _get_settings().resolved_workspace
+    candidates = [
+        workspace / ".aipiloty" / "rules",
+        workspace / "AGENTS.md",
+        workspace / "agents.md",
+        workspace / ".cursorrules",
+        workspace / "CLAUDE.md",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    if len(text) > max_chars:
+                        text = text[:max_chars] + "\n… (truncated)"
+                    return text
+        except OSError:
+            continue
+    return ""
 
 # ── Tool-call parsing patterns (multi-layer, like the old platform) ──────
 
@@ -480,8 +511,10 @@ class AgentOrchestrator:
         memory=None,
         evaluator=None,         # Phase 2: SelfEvaluator | None
         episodic_store=None,    # Phase 3: EpisodicStore | None
+        provider_router: "ProviderRouter | None" = None,  # Phase 3: multi-provider failover
     ):
         self._llm = llm
+        self._router = provider_router  # ProviderRouter (optional; falls back to self._llm)
         self._registry = registry
         self._guardrails = guardrails
         self._get_all_vms = get_all_vms_func
@@ -489,6 +522,12 @@ class AgentOrchestrator:
         self._memory = memory  # AgentMemory | None
         self._evaluator = evaluator  # SelfEvaluator | None
         self._episodic = episodic_store  # EpisodicStore | None
+
+    def _chat_stream(self, messages, tools=None, model_override=None):
+        """Unified stream call — uses ProviderRouter if configured, else OllamaService."""
+        if self._router is not None:
+            return self._router.chat_stream(messages, tools=tools, model_hint=model_override)
+        return self._llm.chat_stream(messages, tools=tools, model_override=model_override)
 
     def _resolve_attachments(
         self, msg: dict[str, Any], attachment_ids: list[str]
@@ -639,11 +678,10 @@ class AgentOrchestrator:
         last_token_at = time.monotonic()
         format_started = time.monotonic()
         try:
-            stream_it = self._llm.chat_stream(
+            stream_it = self._chat_stream(
                 format_msgs,
                 tools=None,
                 model_override=model,
-                num_predict=1400,
             ).__aiter__()
             read_task: asyncio.Task = asyncio.create_task(stream_it.__anext__())
             while True:
@@ -743,7 +781,7 @@ class AgentOrchestrator:
         auto_approve: bool = False,
         model: str | None = None,
         session_key: str | None = None,    # Phase 3: for episodic episode tagging
-        mode: str = "auto",                # Phase B: ask | agent | auto
+        mode: str = "auto",                # ask | agent | auto | plan | debug
     ) -> AsyncGenerator[SSEEvent, None]:
         """Execute the ReAct agent loop, yielding SSE events."""
         kwargs = {"session_key": session_key}
@@ -753,6 +791,45 @@ class AgentOrchestrator:
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
             "",
         )
+
+        # Cursor-like Plan / Debug: bias the user turn without changing ask semantics
+        _mode_l = (mode or "auto").lower()
+        if _mode_l == "plan" and _latest_user_msg:
+            messages = list(messages)
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    messages[i] = {
+                        **messages[i],
+                        "content": (
+                            "[PLAN MODE] Produce a concrete step-by-step plan. "
+                            "Prefer the create_plan tool. Do NOT apply file edits or "
+                            "run destructive commands until the user approves the plan.\n\n"
+                            + str(messages[i].get("content", ""))
+                        ),
+                    }
+                    break
+            _latest_user_msg = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                "",
+            )
+        elif _mode_l == "debug" and _latest_user_msg:
+            messages = list(messages)
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    messages[i] = {
+                        **messages[i],
+                        "content": (
+                            "[DEBUG MODE] Investigate root cause. Check logs, reproduce "
+                            "errors, propose a minimal fix. Prefer diagnostic tools "
+                            "(terminal, list_host_path, health checks) before edits.\n\n"
+                            + str(messages[i].get("content", ""))
+                        ),
+                    }
+                    break
+            _latest_user_msg = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                "",
+            )
 
         # Wrap user messages through guardrails + attachments (all routes need this)
         safe_messages = []
@@ -1015,14 +1092,18 @@ class AgentOrchestrator:
             )
             full_chat = ""
             try:
+                # ProviderRouter handles cloud→local failover automatically;
+                # only use legacy openai_chat_stream when router is not active.
                 stream = (
                     openai_chat_stream(chat_conversation)
-                    if use_cloud
-                    else self._llm.chat_stream(
-                        chat_conversation, tools=None, model_override=model
-                    )
+                    if (use_cloud and self._router is None)
+                    else self._chat_stream(chat_conversation, tools=None, model_override=model)
                 )
                 async for chunk in stream:
+                    # Skip router meta-events (provider_switched / provider_health)
+                    if chunk.get("type") in ("provider_switched", "provider_health", "error"):
+                        yield SSEEvent(chunk["type"], chunk.get("data", {}))
+                        continue
                     msg_obj = chunk.get("message") or {}
                     piece = _normalize_llm_content(msg_obj) if msg_obj else ""
                     if not piece and isinstance(chunk.get("response"), str):
@@ -1031,7 +1112,7 @@ class AgentOrchestrator:
                         full_chat += piece
                         yield SSEEvent("token", {"token": piece, "done": False})
             except Exception as e:
-                if use_cloud:
+                if use_cloud and self._router is None:
                     logger.warning("Cloud GENERAL_QA failed (%s) — falling back to local", e)
                     try:
                         async for chunk in self._llm.chat_stream(
@@ -1132,6 +1213,17 @@ class AgentOrchestrator:
             if mem_context:
                 system_prompt += f"\n\n{mem_context}"
 
+        # ── Project rules (Phase 2) ────────────────────────────────────────
+        # Read .aipiloty/rules or AGENTS.md from workspace root and inject as
+        # project-specific system context (max 2 000 chars to avoid bloat).
+        _project_rules = _load_project_rules()
+        if _project_rules:
+            system_prompt += (
+                "\n\n═══ PROJECT RULES (from workspace AGENTS.md / .aipiloty/rules) ═══\n"
+                + _project_rules
+                + "\n═══ END PROJECT RULES ═══"
+            )
+
         _working_mem = WorkingMemory()
         if self._episodic and _latest_user_msg:
             try:
@@ -1192,7 +1284,7 @@ class AgentOrchestrator:
                 # the pending read and can drop Ollama chunks or break the stream iterator,
                 # leaving full_content empty → bogus "I've completed the request."
                 _PULSE_SEC = 2.5
-                stream_it = self._llm.chat_stream(conversation, tools=None, model_override=model).__aiter__()
+                stream_it = self._chat_stream(conversation, tools=None, model_override=model).__aiter__()
                 read_task: asyncio.Task = asyncio.create_task(stream_it.__anext__())
 
                 while True:

@@ -589,3 +589,53 @@ async def run_terminal(
     except Exception as exc:
         raise HTTPException(500, f"Command execution failed: {exc}")
 
+
+# ── Desktop workspace root override (Electron Desktop only) ──────────────────
+
+class WorkspaceRootRequest(BaseModel):
+    path: str = Field(..., min_length=1, description="Absolute path to the workspace folder")
+
+
+@router.patch("/root")
+async def set_workspace_root(
+    body: WorkspaceRootRequest,
+    identity: str = Depends(require_auth),
+):
+    """Update the active workspace root (used by AIPiloty Desktop when the user opens a folder).
+
+    Updates the in-process settings so all subsequent workspace operations resolve
+    relative to the new path.  Changes are NOT persisted to .env — restart resets
+    to the original WORKSPACE_ROOT config value.
+
+    Security: rejects paths that try to escape to /etc, /sys, /proc, etc.
+    """
+    from pathlib import Path as _Path
+
+    candidate = _Path(body.path).resolve()
+
+    # Reject obviously dangerous system paths
+    _BLOCKED_ROOTS = {
+        _Path("/"),
+        _Path("/etc"),
+        _Path("/sys"),
+        _Path("/proc"),
+        _Path("/dev"),
+        _Path("/bin"),
+        _Path("/sbin"),
+        _Path("/usr"),
+        _Path("/var/log"),
+    }
+    if candidate in _BLOCKED_ROOTS or any(
+        str(candidate).startswith(str(br) + "/") for br in {_Path("/etc"), _Path("/sys"), _Path("/proc")}
+    ):
+        raise HTTPException(400, f"Refused: path '{candidate}' is a protected system directory")
+
+    if not candidate.is_dir():
+        raise HTTPException(400, f"Path does not exist or is not a directory: {candidate}")
+
+    # Hot-patch the settings object so all subsequent calls pick up the new root
+    settings = get_settings()
+    settings.workspace_root = str(candidate)
+
+    return {"path": str(candidate), "status": "ok"}
+

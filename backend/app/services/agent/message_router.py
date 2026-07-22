@@ -158,7 +158,10 @@ def route_message(
     """Decide route for a user turn, optionally biased by UI chat mode."""
     normalized = normalize_user_message(message)
     chat_mode: str = (mode or "auto").lower()
-    if chat_mode not in ("ask", "agent", "auto"):
+    # plan/debug are UI modes (Cursor-like); both may use tools like agent
+    if chat_mode in ("plan", "debug"):
+        pass
+    elif chat_mode not in ("ask", "agent", "auto"):
         chat_mode = "auto"
 
     pending = (
@@ -224,6 +227,26 @@ def route_message(
                 else ("mode_ask_table" if table else "mode_ask")
             ),
             mode=chat_mode,
+        )
+
+    # ── 3a. Plan mode → agent tools, but prefer planning (create_plan) ─
+    if chat_mode == "plan":
+        return RoutedMessage(
+            route=MessageRoute.AGENT_TASK,
+            normalized=normalized,
+            intent=_classify(message, classifier),
+            reason="mode_plan",
+            mode="plan",
+        )
+
+    # ── 3b. Debug mode → agent tools focused on diagnosis ─
+    if chat_mode == "debug":
+        return RoutedMessage(
+            route=MessageRoute.AGENT_TASK,
+            normalized=normalized,
+            intent=_classify(message, classifier),
+            reason="mode_debug",
+            mode="debug",
         )
 
     # ── 3b. Mermaid diagrams (user-provided structure/numbers) → no tools ─

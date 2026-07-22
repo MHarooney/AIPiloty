@@ -8,8 +8,10 @@ import {
   listImageProviders,
   upsertImageProvider,
   deleteImageProvider,
+  getLlmProviderHealth,
   type ProviderSecretInfo,
   type ImageModelOption,
+  type LlmProvidersConfig,
 } from "@/lib/api";
 import {
   Settings,
@@ -25,8 +27,37 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  Cpu,
 } from "lucide-react";
 import { toast } from "sonner";
+
+// ── LLM provider definitions ──────────────────────────────────────────────────
+const LLM_PROVIDERS = [
+  {
+    id: "claude",
+    name: "Anthropic Claude",
+    hint: "console.anthropic.com → API keys",
+    placeholder: "sk-ant-…",
+    configKey: "anthropic_api_key",
+    priority: 1,
+  },
+  {
+    id: "openai",
+    name: "OpenAI GPT",
+    hint: "platform.openai.com → API keys",
+    placeholder: "sk-…",
+    configKey: "openai_api_key",
+    priority: 2,
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    hint: "aistudio.google.com → API key",
+    placeholder: "AIza…",
+    configKey: "gemini_api_key",
+    priority: 3,
+  },
+] as const;
 
 interface ToolInfo { name: string; description: string; category?: string; risk_level?: string }
 
@@ -62,6 +93,121 @@ export default function SettingsPage() {
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [savingProvider, setSavingProvider] = useState<string | null>(null);
 
+  // LLM chat provider state (Claude / OpenAI / Gemini for agent chat)
+  const [llmKeyDrafts, setLlmKeyDrafts] = useState<Record<string, string>>({
+    claude: "", openai: "", gemini: "",
+  });
+  const [llmKeySaved, setLlmKeySaved] = useState<Record<string, boolean>>({});
+  const [llmSaving, setLlmSaving] = useState<Record<string, boolean>>({});
+  const [showLlmKeys, setShowLlmKeys] = useState<Record<string, boolean>>({});
+  const [llmHealth, setLlmHealth] = useState<LlmProvidersConfig | null>(null);
+  const [providerPriority, setProviderPriority] = useState("claude,openai,gemini,ollama");
+  const [savingPriority, setSavingPriority] = useState(false);
+
+
+  const loadLlmStatus = useCallback(async () => {
+    try {
+      const [cfg, health] = await Promise.all([
+        getConfig(),
+        getLlmProviderHealth().catch(() => null),
+      ]);
+      const llm = cfg?.llm_providers as LlmProvidersConfig | undefined;
+      if (llm) {
+        setLlmHealth(llm);
+        if (llm.priority) setProviderPriority(llm.priority);
+        setLlmKeySaved({
+          claude: !!llm.providers?.claude?.configured,
+          openai: !!llm.providers?.openai?.configured,
+          gemini: !!llm.providers?.gemini?.configured,
+        });
+      } else if (health) {
+        setLlmHealth({
+          priority: "claude,openai,gemini,ollama",
+          active: health.active,
+          chain: health.chain,
+          providers: {
+            claude: { configured: false },
+            openai: { configured: false },
+            gemini: { configured: false },
+            ollama: { configured: true },
+          },
+        });
+      }
+    } catch {
+      /* backend may still be reloading */
+    }
+  }, []);
+
+  const saveLlmKey = async (providerId: string) => {
+    const meta = LLM_PROVIDERS.find((p) => p.id === providerId);
+    if (!meta) return;
+    const raw = (llmKeyDrafts[providerId] || "").trim();
+    if (raw.length < 8) {
+      toast.error("Paste a valid API key first (min 8 characters)");
+      return;
+    }
+    setLlmSaving((s) => ({ ...s, [providerId]: true }));
+    try {
+      const payload: Record<string, string> = { [meta.configKey]: raw };
+      const res = await updateConfig(payload);
+      setLlmKeyDrafts((d) => ({ ...d, [providerId]: "" }));
+      setLlmKeySaved((s) => ({ ...s, [providerId]: true }));
+      const chain = (res.updated?.provider_chain as string[]) || [];
+      toast.success(
+        chain.length
+          ? `${meta.name} key saved — chain: ${chain.join(" → ")}`
+          : `${meta.name} key saved`,
+      );
+      await loadLlmStatus();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save LLM key");
+    } finally {
+      setLlmSaving((s) => ({ ...s, [providerId]: false }));
+    }
+  };
+
+  const clearLlmKey = async (providerId: string) => {
+    const meta = LLM_PROVIDERS.find((p) => p.id === providerId);
+    if (!meta) return;
+    if (!confirm(`Remove ${meta.name} API key?`)) return;
+    setLlmSaving((s) => ({ ...s, [providerId]: true }));
+    try {
+      await updateConfig({ [meta.configKey]: "" });
+      setLlmKeySaved((s) => ({ ...s, [providerId]: false }));
+      toast.success(`${meta.name} key removed`);
+      await loadLlmStatus();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to remove key");
+    } finally {
+      setLlmSaving((s) => ({ ...s, [providerId]: false }));
+    }
+  };
+
+  const savePriority = async () => {
+    const cleaned = providerPriority
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+      .join(",");
+    if (!cleaned) {
+      toast.error("Priority chain cannot be empty");
+      return;
+    }
+    setSavingPriority(true);
+    try {
+      const res = await updateConfig({ provider_priority: cleaned });
+      setProviderPriority(cleaned);
+      const chain = (res.updated?.provider_chain as string[]) || cleaned.split(",");
+      toast.success(`Priority updated — chain: ${chain.join(" → ")}`);
+      await loadLlmStatus();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update priority");
+    } finally {
+      setSavingPriority(false);
+    }
+  };
+
+
   const loadProviders = useCallback(async () => {
     try {
       const data = await listImageProviders();
@@ -86,11 +232,22 @@ export default function SettingsPage() {
         setModel(cfg?.ollama_model || "");
         setTemperature(cfg?.ollama_temperature ?? 0.1);
         setContextLength(cfg?.ollama_context_length ?? 8192);
+        const llm = cfg?.llm_providers as LlmProvidersConfig | undefined;
+        if (llm) {
+          setLlmHealth(llm);
+          if (llm.priority) setProviderPriority(llm.priority);
+          setLlmKeySaved({
+            claude: !!llm.providers?.claude?.configured,
+            openai: !!llm.providers?.openai?.configured,
+            gemini: !!llm.providers?.gemini?.configured,
+          });
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
     loadProviders();
-  }, [loadProviders]);
+    void loadLlmStatus();
+  }, [loadProviders, loadLlmStatus]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -176,7 +333,7 @@ export default function SettingsPage() {
             <div className="flex-1">
               <h1 className="text-xl font-bold text-gray-100">Settings</h1>
               <p className="text-xs text-gray-500">
-                Image API keys are encrypted in the database — never stored in code or .env.
+                LLM + image provider keys are write-only. Image keys stay encrypted in DB; LLM keys hot-patch the ProviderRouter.
               </p>
             </div>
             {dirty && (
@@ -190,6 +347,137 @@ export default function SettingsPage() {
               </button>
             )}
           </div>
+
+
+          <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-violet-600/15 border border-violet-500/20 flex items-center justify-center">
+                <Cpu size={16} className="text-violet-400" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                  <Cpu size={14} className="text-violet-400" /> LLM Providers
+                </h2>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  Primary chat models for the agent. Failover chain:
+                  {" "}
+                  <span className="text-violet-300 font-mono">
+                    {(llmHealth?.chain || providerPriority.split(",")).join(" → ")}
+                  </span>
+                  {llmHealth?.active ? (
+                    <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-800/40">
+                      active: {llmHealth.active}
+                    </span>
+                  ) : null}
+                </p>
+                <p className="text-[10px] text-gray-600 mt-1">
+                  Keys are write-only (never returned by the API).
+                  "Stored in backend settings / env for this process."
+                  {" "}Ollama remains the offline fallback.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-800/60 bg-gray-950/40 p-3 space-y-2">
+              <label className="text-[10px] text-gray-500 block">
+                Priority order (comma-separated: claude, openai, gemini, ollama)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={providerPriority}
+                  onChange={(e) => setProviderPriority(e.target.value)}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-violet-500"
+                  placeholder="claude,openai,gemini,ollama"
+                />
+                <button
+                  type="button"
+                  onClick={savePriority}
+                  disabled={savingPriority}
+                  className="px-3 py-2 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:opacity-50 flex items-center gap-1"
+                >
+                  {savingPriority ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                  Apply
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {LLM_PROVIDERS.map((provider) => {
+                const configured = !!llmKeySaved[provider.id];
+                const hint = llmHealth?.providers?.[provider.id as "claude" | "openai" | "gemini"]?.key_hint;
+                return (
+                  <div key={provider.id} className="rounded-xl border border-gray-800/60 bg-gray-950/50 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-gray-200">{provider.name}</p>
+                        <p className="text-[10px] text-gray-500">{provider.hint}</p>
+                      </div>
+                      {configured ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/40">
+                          {hint || "configured"}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 text-gray-500">not set</span>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-gray-500 mb-1 block">API key</label>
+                      <div className="relative">
+                        <input
+                          type={showLlmKeys[provider.id] ? "text" : "password"}
+                          autoComplete="off"
+                          value={llmKeyDrafts[provider.id] || ""}
+                          onChange={(e) =>
+                            setLlmKeyDrafts((d) => ({ ...d, [provider.id]: e.target.value }))
+                          }
+                          placeholder={configured ? "•••• paste new key to replace" : provider.placeholder}
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-9 text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowLlmKeys((s) => ({ ...s, [provider.id]: !s[provider.id] }))
+                          }
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                        >
+                          {showLlmKeys[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => saveLlmKey(provider.id)}
+                        disabled={!!llmSaving[provider.id]}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:opacity-50"
+                      >
+                        {llmSaving[provider.id] ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Save size={12} />
+                        )}
+                        Save key
+                      </button>
+                      {configured && (
+                        <button
+                          type="button"
+                          onClick={() => clearLlmKey(provider.id)}
+                          disabled={!!llmSaving[provider.id]}
+                          className="px-3 py-2 rounded-lg border border-red-900/40 text-red-400 text-xs hover:bg-red-950/30"
+                          title="Remove key"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
           <section className="bg-gray-900/80 border border-gray-800/50 rounded-xl p-5 space-y-4">
             <div className="flex items-start gap-3">
