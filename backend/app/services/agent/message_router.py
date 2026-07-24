@@ -34,6 +34,7 @@ _AGENT_CATEGORIES = frozenset({
     "vm",
     "deployment",
     "devops",
+    "mission",
     "code",
     "document",
     "image",
@@ -94,7 +95,8 @@ _VAGUE = frozenset({
 _TASK_VERBS = re.compile(
     r"\b(list|run|check|deploy|generate|create|show|get|find|ssh|"
     r"install|restart|build|write|execute|diagnose|monitor|search|"
-    r"fetch|browse|open|delete|remove|update|patch|test)\b",
+    r"fetch|browse|open|delete|remove|update|patch|test|"
+    r"add|ensure|register|seed|put)\b",
     re.I,
 )
 
@@ -247,6 +249,32 @@ def route_message(
             intent=_classify(message, classifier),
             reason="mode_debug",
             mode="debug",
+        )
+
+    # ── 3c. Mission Board seed/register → always agent tools ─
+    if re.search(
+        r"\bmission\s*board\b|\bensure_missions\b|"
+        r"\b(add|ensure|register|seed|put)\b.*\b(mission|deployment)s?\b|"
+        r"\b(all|everything)\b.*\b(deployment|container|mission)\b",
+        message or "",
+        re.I,
+    ):
+        intent = _classify(message, classifier)
+        tools = list(intent.suggested_tools or [])
+        if "ensure_missions" not in tools:
+            tools = ["ensure_missions", *tools]
+        intent = Intent(
+            category="mission",
+            confidence=max(intent.confidence, 0.85),
+            suggested_tools=tools,
+            context_hints={**(intent.context_hints or {}), "mission_board": True},
+        )
+        return RoutedMessage(
+            route=MessageRoute.AGENT_TASK,
+            normalized=normalized,
+            intent=intent,
+            reason="mission_board_seed",
+            mode=chat_mode if chat_mode != "ask" else "agent",
         )
 
     # ── 3b. Mermaid diagrams (user-provided structure/numbers) → no tools ─
@@ -470,8 +498,8 @@ _CHAT_SYSTEM_PROMPT = """You are AIPiloty — a friendly AI DevOps and document 
 Answer clearly and helpfully in plain language.
 Do NOT call tools, emit JSON tool blocks, or invent tool results.
 If the user says yes/no/ok with little context, give a short acknowledgement and ask what they want next — do NOT invent a deployment or unrelated plan.
-If they ask to put deployments / containers / "everything" on the **Mission Board**, explain that Ask mode cannot write Missions — they should switch to **Agent** (or Auto) and say: "put all deployments on the mission board" (that runs ensure_missions). Do NOT pretend you don't know what Mission Board is.
-If you need tools to complete a task, briefly say what you would need to do and ask them to switch to Agent mode or rephrase as a concrete task.
+If they ask to put deployments / containers / "everything" on the **Mission Board**, say briefly that Ask mode is read-only and they should switch to **Agent** (or Auto) so `ensure_missions` can run — do NOT claim you already added anything, and do NOT pretend you don't know what Mission Board is.
+If you need tools for other tasks, briefly say what you would need and ask them to switch to Agent mode.
 """
 
 

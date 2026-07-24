@@ -279,11 +279,12 @@ class EnsureLmsTestPayload(BaseModel):
 class EnsureMissionsPayload(BaseModel):
     """Seed Missions by query or bulk-discover from VM docker ps (DB-only)."""
 
-    query: Optional[str] = "lms-test"
-    seed_all: bool = False
+    query: Optional[str] = "all deployments on mission board"
+    seed_all: bool = True
     discover_all: bool = False
     force_update: bool = True
     vm_credential_id: Optional[int] = None
+    host: Optional[str] = None
 
 
 @router.post("/ensure-lms-test")
@@ -292,7 +293,7 @@ async def ensure_lms_test_mission(
     identity: str = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
-    """Idempotently register https://lms-test.innovito.net as a Mission.
+    """Idempotently register the LMS test Mission from DB/query hints.
 
     Does not touch the VM — only writes AIPiloty DB metadata.
     """
@@ -338,4 +339,5 @@ async def ensure_missions(
         discover_all=payload.discover_all,
         force_update=payload.force_update,
         vm_credential_id=payload.vm_credential_id,
+        host_hint=payload.host,
     )

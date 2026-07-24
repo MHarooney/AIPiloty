@@ -41,7 +41,7 @@ def _tokens(query: str) -> list[str]:
         host = urlparse(u).hostname or ""
         if host:
             out.append(host.lower())
-            # lms-test.innovito.net → lms-test
+            # example.com → example (first label)
             out.append(host.split(".")[0].lower())
     # dedupe
     seen: set[str] = set()

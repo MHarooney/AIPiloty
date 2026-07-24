@@ -452,8 +452,8 @@ function DeploymentModal({
           <div className="col-span-2 border-t border-gray-800 pt-3">
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-3">Flight Deck URLs</p>
           </div>
-          {field("Public URL", "public_url", "https://lms-test.innovito.net/")}
-          {field("API URL", "api_url", "https://evolms-test.innovito.net/")}
+          {field("Public URL", "public_url", "https://app.example.com/")}
+          {field("API URL", "api_url", "https://api.example.com/")}
           <div className="col-span-2 flex flex-col gap-1">
             <label className="text-xs text-gray-400 font-medium">Pipeline Profile</label>
             <select value={form.pipeline_profile} onChange={(e) => set("pipeline_profile", e.target.value)}
