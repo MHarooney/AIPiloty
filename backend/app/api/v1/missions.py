@@ -270,10 +270,20 @@ async def probe_mission(
 
 
 class EnsureLmsTestPayload(BaseModel):
-    """Create/update the LMS Test mission from discovered docker facts (idempotent)."""
+    """Create/update the LMS Test mission from catalog (idempotent, DB-only)."""
 
     vm_credential_id: Optional[int] = None
     force_update: bool = True
+
+
+class EnsureMissionsPayload(BaseModel):
+    """Seed Missions by query or bulk-discover from VM docker ps (DB-only)."""
+
+    query: Optional[str] = "lms-test"
+    seed_all: bool = False
+    discover_all: bool = False
+    force_update: bool = True
+    vm_credential_id: Optional[int] = None
 
 
 @router.post("/ensure-lms-test")
@@ -286,95 +296,46 @@ async def ensure_lms_test_mission(
 
     Does not touch the VM — only writes AIPiloty DB metadata.
     """
-    # Resolve VM
-    vm_id = payload.vm_credential_id
-    vm: Optional[VMCredential] = None
-    if vm_id:
-        vr = await db.execute(select(VMCredential).where(VMCredential.id == vm_id))
-        vm = vr.scalar_one_or_none()
-    if vm is None:
-        vr = await db.execute(
-            select(VMCredential).where(VMCredential.host_ip == "24.144.80.17").limit(1)
-        )
-        vm = vr.scalar_one_or_none()
-    if vm is None:
-        # Create VM credential shell (key loaded from local agent host at probe time)
-        vm = VMCredential(
-            name="root@24.144.80.17",
-            provider="digitalocean",
-            host_ip="24.144.80.17",
-            ssh_username="root",
-            ssh_port=22,
-            is_active=True,
-        )
-        # Prefer attaching local DO key content if present (encrypted at rest)
-        key_path = _default_ssh_key_path()
-        if key_path and "digitalocean" in key_path:
-            try:
-                vm.decrypted_private_key = Path(key_path).read_text()
-            except Exception:
-                pass
-        db.add(vm)
-        await db.flush()
+    from ...services.mission.ensure import ensure_missions_for_query
 
-    name = "LMS Test (Mission Control)"
-    existing = await db.execute(select(Deployment).where(Deployment.name == name))
-    dep = existing.scalar_one_or_none()
-    meta = {
-        "ownership": default_ownership(),
-        "ai_can": [
-            "SSH read-only diagnostics on this VM",
-            "Probe lms-test / evolms-test HTTP health",
-            "Inspect frontend-vue-app-test + backend-evolms-test",
-            "Backend pull/restart only after Clearance",
-        ],
-        "you_must": [
-            "Frontend cloud build for vue LMS images",
-            "Any DNS/SSL changes",
-            "Never delete sibling containers on this shared VM",
-        ],
-        "notes": "Shared DigitalOcean VM — scope tools to lms-test containers only.",
-        "public_url": "https://lms-test.innovito.net/",
-        "api_url": "https://evolms-test.innovito.net/",
-        "backend_container": "backend-evolms-test",
-    }
-
-    fields = dict(
-        name=name,
-        project_name="lms-test",
-        environment="test",
-        status=DeploymentStatus.RUNNING,
-        vm_credential_id=vm.id,
-        deploy_path="/var/www/evolms-test",
-        branch="test",
-        docker_image="harooney/docker-vue-lms-test",
-        dockerhub_image="harooney/docker-vue-lms-test",
-        dockerhub_tag="lms-vue-app",
-        container_name="frontend-vue-app-test",
-        backend_container="backend-evolms-test",
-        port_mapping="8087:80",
-        public_url="https://lms-test.innovito.net/",
-        api_url="https://evolms-test.innovito.net/",
-        pipeline_profile="inspect_only",
-        docker_run_extra_args="--restart unless-stopped",
-        mission_meta=json.dumps(meta),
+    result = await ensure_missions_for_query(
+        db,
+        "lms-test",
+        seed_all=False,
+        force_update=payload.force_update,
+        vm_credential_id=payload.vm_credential_id,
     )
-
+    seeded = result.get("seeded") or []
+    skipped = result.get("skipped") or []
+    mission = None
     created = False
-    if dep is None:
-        dep = Deployment(**fields)
-        db.add(dep)
-        created = True
-    elif payload.force_update:
-        for k, v in fields.items():
-            if k == "name":
-                continue
-            setattr(dep, k, v)
-
-    await db.commit()
-    await db.refresh(dep)
+    if seeded:
+        mission = seeded[0]["mission"]
+        created = bool(seeded[0].get("created"))
+    elif skipped:
+        mission = skipped[0]["mission"]
     return {
         "created": created,
-        "mission": mission_to_flight_deck(dep, vm),
-        "message": "LMS Test mission registered in AIPiloty DB only — VM was not modified.",
+        "mission": mission,
+        "message": result.get("message")
+        or "LMS Test mission registered in AIPiloty DB only — VM was not modified.",
     }
+
+
+@router.post("/ensure")
+async def ensure_missions(
+    payload: EnsureMissionsPayload = EnsureMissionsPayload(),
+    identity: str = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    """Match catalog Missions to a query and seed any that are missing (DB-only)."""
+    from ...services.mission.ensure import ensure_missions_for_query
+
+    return await ensure_missions_for_query(
+        db,
+        payload.query,
+        seed_all=payload.seed_all,
+        discover_all=payload.discover_all,
+        force_update=payload.force_update,
+        vm_credential_id=payload.vm_credential_id,
+    )

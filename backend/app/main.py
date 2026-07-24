@@ -47,6 +47,7 @@ from .services.tools.web import FetchUrlTool
 from .services.tools.research.web_search import WebSearchTool
 from .services.tools.planning.create_plan import CreatePlanTool
 from .services.tools.platform_stats import GetPlatformStatsTool
+from .services.tools.mission_seed import EnsureMissionsTool
 from .services.tools.code.workspace_tools import WriteFileTool, ApplyPatchTool
 from .services.tools.registry import ToolRegistry
 from .services.tools.testing.api_tools import ProbeApiTargetTool, RunApiTestsTool, AnalyzeTestFailuresTool
@@ -298,6 +299,7 @@ async def lifespan(app: FastAPI):
         WebSearchTool(),
         CreatePlanTool(),
         GetPlatformStatsTool(db_session_factory=async_session_factory),
+        EnsureMissionsTool(db_session_factory=async_session_factory),
         ConfigureMCPTool(),   # Phase IDE: AI-driven MCP configuration
     ]
     registry.register_many(tools_list)

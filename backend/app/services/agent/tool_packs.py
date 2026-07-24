@@ -14,6 +14,7 @@ from .intent_classifier import Intent
 # Tiny always-safe companions (no writes, no SSH, no deploy)
 READ_CORE: list[str] = [
     "get_platform_stats",
+    "ensure_missions",
     "kb_search",
     "create_plan",
 ]
@@ -27,24 +28,34 @@ TOOL_PACKS: dict[str, list[str]] = {
     ],
     "stats": [
         "get_platform_stats",
+        "ensure_missions",
         "verify_ollama_models",
         "get_host_environment",
     ],
     "vm_read": [
         "vm_health_check",
         "diagnose_vm",
+        "ensure_missions",
         "get_host_environment",
     ],
     "vm_shell": [
         "ssh_command",
         "vm_health_check",
         "diagnose_vm",
+        "ensure_missions",
         "get_host_environment",
     ],
     "deploy": [
         "deploy",
+        "ensure_missions",
         "vm_health_check",
         "ssh_command",
+    ],
+    "mission": [
+        "ensure_missions",
+        "get_platform_stats",
+        "vm_health_check",
+        "create_plan",
     ],
     "devops_local": [
         "run_terminal_command",
@@ -92,6 +103,7 @@ TOOL_PACKS: dict[str, list[str]] = {
 _CATEGORY_PACK: dict[str, str] = {
     "vm": "vm_shell",
     "deployment": "deploy",
+    "mission": "mission",
     "devops": "devops_local",
     "code": "code_read",
     "document": "document",
@@ -113,6 +125,17 @@ _OLLAMA_RE = re.compile(
 )
 _HEALTH_ONLY_RE = re.compile(
     r"\b(health|status|uptime|disk|memory|cpu|diagnose|troubleshoot)\b",
+    re.I,
+)
+_MISSION_SEED_RE = re.compile(
+    r"\b(seed|ensure|register)\b.*\b(mission|deployment|tenant|board)\b"
+    r"|\b(mission|deployment|tenant)\b.*\b(seed|ensure|register)\b"
+    r"|\bmission\s*board\b"
+    r"|\b(all|everything)\b.*\b(mission|deployment|board|container)\b"
+    r"|\b(put|add)\s+them\b.*\b(mission|board)\b"
+    r"|\bensure\s+that\s+they\b"
+    r"|\blms-test\b|\bevolms-test\b|\bensure\s+lms\b"
+    r"|^\s*(everything|all(\s+of\s+them)?)\s*$",
     re.I,
 )
 _IMAGE_RE = re.compile(
@@ -156,6 +179,8 @@ def resolve_pack_name(intent: Optional[Intent], message: str = "") -> str:
         return "planning"
 
     # High-signal message overrides (order matters)
+    if _MISSION_SEED_RE.search(msg):
+        return "mission"
     if _IMAGE_RE.search(msg) and not _MERMAID_STRUCTURAL_RE.search(msg):
         return "image"
     if _OLLAMA_RE.search(msg):
@@ -201,7 +226,8 @@ def mcp_category_gate(tool_category: str, pack: str) -> bool:
     """
     allowed = {
         "ollama": {"host", "stats", "general", "platform"},
-        "stats": {"host", "stats", "general", "platform"},
+        "stats": {"host", "stats", "general", "platform", "devops"},
+        "mission": {"devops", "deployment", "stats", "general", "platform"},
         "vm_read": {"devops", "vm", "host", "general"},
         "vm_shell": {"devops", "vm", "host", "general"},
         "deploy": {"devops", "deployment", "vm", "general"},

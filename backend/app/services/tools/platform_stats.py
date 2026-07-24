@@ -36,9 +36,9 @@ class GetPlatformStatsTool(BaseTool):
         include_details = kw.get("include_details", False)
 
         try:
-            from ..models.vm import VMCredential
-            from ..models.deployment import Deployment, DeploymentStatus
-            from ..models.chat import ChatSession
+            from ...models.vm import VMCredential
+            from ...models.deployment import Deployment, DeploymentStatus
+            from ...models.chat import ChatSession
 
             async with self._db_factory() as session:
                 # VM stats
@@ -80,6 +80,26 @@ class GetPlatformStatsTool(BaseTool):
                     lines.append(f"    • {status}: {count}")
 
             lines.append(f"**Chat Sessions:** {total_sessions}")
+
+            if total_deployments == 0:
+                lines.extend(
+                    [
+                        "",
+                        "_No Missions in the database yet._ Call **ensure_missions** "
+                        "with the tenant URL/name — it discovers via read-only "
+                        "docker ps on a registered VM and saves to DB (nothing "
+                        "static from git).",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        "",
+                        "_Tip:_ Catalog = database. If a tenant is missing, call "
+                        "**ensure_missions** with URL/name to discover & save, "
+                        "then Probe.",
+                    ]
+                )
 
             # Scheduler stats
             if self._scheduler:

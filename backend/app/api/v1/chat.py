@@ -120,7 +120,7 @@ async def chat_stream(
         if msg.attachment_ids and storage:
             attachment_metas.extend(storage.resolve_many(msg.attachment_ids))
 
-    # Save user messages
+    # Save only the newly submitted turn(s) — frontend sends the latest user message.
     for msg in req.messages:
         att_json = None
         if msg.attachment_ids:
@@ -128,8 +128,44 @@ async def chat_stream(
         db.add(ChatMessage(session_id=session.id, role=msg.role, content=msg.content, attachments_json=att_json))
     await db.flush()
 
-    # Build message history
-    messages = [{"role": m.role, "content": m.content, "attachment_ids": m.attachment_ids} for m in req.messages]
+    # Rebuild full session history for the model (prior turns live in DB).
+    # Without this, pronouns like "they" / "those containers" have no antecedent.
+    MAX_HISTORY = 40
+    hist = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session.id)
+        .order_by(ChatMessage.id.asc())
+    )
+    rows = list(hist.scalars().all())
+    if len(rows) > MAX_HISTORY:
+        rows = rows[-MAX_HISTORY:]
+
+    messages: list[dict[str, Any]] = []
+    for r in rows:
+        if r.role not in ("user", "assistant", "system"):
+            continue
+        content = (r.content or "").strip()
+        if not content:
+            continue
+        if r.role == "assistant" and len(content) > 8000:
+            content = content[:8000] + "\n…[truncated for context]"
+        messages.append({"role": r.role, "content": content})
+
+    # Keep attachment ids on the latest user turn for multimodal tools
+    if req.messages and messages and messages[-1].get("role") == "user":
+        last_req = req.messages[-1]
+        if last_req.attachment_ids:
+            messages[-1]["attachment_ids"] = last_req.attachment_ids
+
+    if not messages:
+        messages = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "attachment_ids": m.attachment_ids,
+            }
+            for m in req.messages
+        ]
 
     async def event_generator():
         # Send session key first

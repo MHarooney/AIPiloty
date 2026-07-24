@@ -16,7 +16,7 @@ from typing import Optional
 class Intent:
     """Classified intent from user message."""
 
-    category: str  # devops, deployment, vm, knowledge, code, general, planning, search
+    category: str  # devops, deployment, mission, vm, knowledge, code, general, planning, search
     confidence: float  # 0..1
     suggested_tools: list[str]
     context_hints: dict[str, str]
@@ -68,9 +68,26 @@ _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
     (re.compile(r"\b(ssh|vm|server|vps|machine|host|connect)\b", re.I), "vm", ["ssh_command", "vm_health_check"], 0.3),
     (re.compile(r"\b(health|status|check|monitor|uptime|disk|memory|cpu)\b", re.I), "vm", ["vm_health_check"], 0.2),
     (re.compile(r"\b(diagnose|troubleshoot|debug|fix|issue|problem|error)\b", re.I), "vm", ["diagnose_vm"], 0.3),
+    # Mission seed / register (before generic deploy — DB-only, preferred first step)
+    (
+        re.compile(
+            r"\b(seed|ensure|register)\b.*\b(mission|deployment|tenant|board)\b"
+            r"|\b(mission|deployment|tenant)\b.*\b(seed|ensure|register)\b"
+            r"|\bmission\s*board\b"
+            r"|\b(all|everything)\b.*\b(mission|deployment|board|container)\b"
+            r"|\b(put|add)\s+them\b.*\b(mission|board)\b"
+            r"|\bensure\s+that\s+they\b"
+            r"|\blms-test\b|\bevolms-test\b|\bensure\s+lms\b"
+            r"|^\s*(everything|all(\s+of\s+them)?)\s*$",
+            re.I,
+        ),
+        "mission",
+        ["ensure_missions"],
+        0.7,
+    ),
     # Deployment
-    (re.compile(r"\b(deploy|deployment|pipeline|build|release|rollback)\b", re.I), "deployment", ["deploy"], 0.4),
-    (re.compile(r"\b(docker|container|compose|service)\b", re.I), "deployment", ["ssh_command"], 0.2),
+    (re.compile(r"\b(deploy|deployment|pipeline|build|release|rollback)\b", re.I), "deployment", ["deploy", "ensure_missions"], 0.4),
+    (re.compile(r"\b(docker|container|compose|service)\b", re.I), "deployment", ["ssh_command", "ensure_missions"], 0.2),
     # Knowledge / RAG
     (re.compile(r"\b(knowledge|document|search|find|lookup|rag)\b", re.I), "knowledge", ["search_knowledge"], 0.3),
     (re.compile(r"\b(ingest|upload|index)\b", re.I), "knowledge", ["search_knowledge"], 0.2),
@@ -110,7 +127,7 @@ _PATTERNS: list[tuple[re.Pattern, str, list[str], float]] = [
     # Planning
     (re.compile(r"\b(plan|strategy|steps|roadmap|how\s+to|guide|migration)\b", re.I), "planning", ["create_plan"], 0.3),
     # Stats
-    (re.compile(r"\b(stats|statistics|overview|dashboard|summary|platform)\b", re.I), "stats", ["get_platform_stats"], 0.3),
+    (re.compile(r"\b(stats|statistics|overview|dashboard|summary|platform)\b", re.I), "stats", ["get_platform_stats", "ensure_missions"], 0.3),
     # Terminal / local
     (re.compile(r"\b(run|execute|terminal|command|shell|bash)\b", re.I), "devops", ["run_terminal_command"], 0.2),
 ]
