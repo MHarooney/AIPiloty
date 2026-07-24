@@ -46,8 +46,8 @@
     "voiceChat": "Voice input",
     "voiceListening": "Listening…",
     "voiceNotSupported": "Voice input not supported in this browser",
-    "mentionFiles": "Mention files with @",
-    "mentionHint": "Type @ to reference files, docs, or context"
+    "mentionFiles": "Mention Missions, VMs, or files with @",
+    "mentionHint": "Type @ to scope a Mission or VM, or attach files/docs"
   },
   "images": {
     "title": "Image Generation",

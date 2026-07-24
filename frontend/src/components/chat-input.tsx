@@ -5,12 +5,12 @@ import { Send, Square, Shield, Paperclip, X, FileText, Image as ImageIcon, Mic, 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { streamChat, uploadAttachment, getWorkspaceFile } from "@/lib/api";
-import { useChatStore, ChatAttachment } from "@/stores/chat-store";
+import { useChatStore } from "@/stores/chat-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useMissionStore } from "@/stores/mission-store";
 import ChatModeToggle from "./chat-mode-toggle";
 import ChatModelPicker from "./chat-model-picker";
-import ContextMention from "./context-mention";
+import ContextMention, { type MentionSelection } from "./context-mention";
 
 const ACCEPTED_TYPES = "image/png,image/jpeg,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
@@ -23,6 +23,39 @@ interface WorkspaceFile {
   loading?: boolean;
 }
 
+interface ScopeChip {
+  id: string;
+  kind: "mission" | "vm";
+  label: string;
+  missionId?: number;
+  vmId?: number;
+  hostIp?: string;
+  sshUsername?: string;
+}
+
+function buildScopePrefix(chips: ScopeChip[]): string {
+  if (!chips.length) return "";
+  const lines: string[] = ["[FLIGHT DECK SCOPE — user @mentioned]"];
+  for (const c of chips) {
+    if (c.kind === "mission" && c.missionId != null) {
+      lines.push(
+        `- Active Mission id=${c.missionId} (“${c.label}”)` +
+          (c.hostIp ? ` on VM ${c.hostIp}` : "") +
+          ". Prefer this Mission for tools / ensure_missions / probe."
+      );
+    } else if (c.kind === "vm" && c.vmId != null) {
+      lines.push(
+        `- Target VM id=${c.vmId}` +
+          (c.hostIp ? ` host=${c.hostIp}` : "") +
+          (c.sshUsername ? ` user=${c.sshUsername}` : "") +
+          ` (“${c.label}”). Prefer this VM for ssh / vm_health_check / ensure_missions host=.`
+      );
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 export default function ChatInput() {
   const [input, setInput] = useState("");
   const [isDragging, setIsDragging] = useState(false);
@@ -30,11 +63,13 @@ export default function ChatInput() {
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [showMention, setShowMention] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [scopeChips, setScopeChips] = useState<ScopeChip[]>([]);
   const recognitionRef = useRef<any>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isStreaming, sessionKey, addUserMessage, handleSSEEvent, selectedModel } = useChatStore();
+  const { isStreaming, addUserMessage, handleSSEEvent, selectedModel } = useChatStore();
   const pendingAttachments = useChatStore((s) => s.pendingAttachments);
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);
   const removePendingAttachment = useChatStore((s) => s.removePendingAttachment);
@@ -42,6 +77,17 @@ export default function ChatInput() {
   const intensityLevel = useChatStore((s) => s.intensityLevel);
   const chatMode = useChatStore((s) => s.chatMode);
   const isWaitingApproval = systemState === "waiting_approval";
+  const setActiveMission = useMissionStore((s) => s.setActiveMission);
+  const selectMissionById = useMissionStore((s) => s.selectMissionById);
+  const loadMissions = useMissionStore((s) => s.loadMissions);
+  const missions = useMissionStore((s) => s.missions);
+
+  // Prefetch missions for mention + Flight Deck
+  useEffect(() => {
+    if (!missions.length) {
+      void loadMissions();
+    }
+  }, [missions.length, loadMissions]);
 
   // Consume explain-selection from code editor
   useEffect(() => {
@@ -81,7 +127,12 @@ export default function ChatInput() {
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if ((!text && pendingAttachments.length === 0 && workspaceFiles.length === 0) || isStreaming) return;
+    if (
+      (!text && pendingAttachments.length === 0 && workspaceFiles.length === 0 && scopeChips.length === 0) ||
+      isStreaming
+    ) {
+      return;
+    }
 
     // Build workspace context prefix (injected silently into the message)
     let contextPrefix = "";
@@ -93,22 +144,40 @@ export default function ChatInput() {
       }
     }
 
-    const fullMessage = contextPrefix + (text || "Please analyze the attached file(s).");
+    const scopePrefix = buildScopePrefix(scopeChips);
+    const fullMessage =
+      scopePrefix +
+      contextPrefix +
+      (text || (scopeChips.length ? "Work on the @mentioned Mission/VM." : "Please analyze the attached file(s)."));
     const attachments = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
     const attachmentIds = attachments?.map((a) => a.id);
 
+    const scopeNote = scopeChips.length
+      ? `*(scoped: ${scopeChips.map((c) => `@${c.label}`).join(", ")})*\n`
+      : "";
     const displayContent = workspaceFiles.length > 0
-      ? `*(with ${workspaceFiles.map(f => f.name).join(", ")})*\n${text || "Please analyze."}`
-      : (text || "(attached files)");
+      ? `${scopeNote}*(with ${workspaceFiles.map(f => f.name).join(", ")})*\n${text || "Please analyze."}`
+      : scopeNote
+        ? `${scopeNote}${text || "Work on the @mentioned Mission/VM."}`
+        : (text || "(attached files)");
 
     addUserMessage(displayContent, attachments);
     setInput("");
     setWorkspaceFiles([]);
+    setScopeChips([]);
+    setShowMention(false);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
 
-    // Flight Deck: detect incident patterns + scope chat to active Mission
+    // Flight Deck: detect incident patterns + scope chat to mentioned / active Mission
     useMissionStore.getState().detectIncidentFromText(fullMessage);
-    const missionId = useMissionStore.getState().activeMission?.id ?? null;
+    const mentionedMission = scopeChips.find((c) => c.kind === "mission" && c.missionId != null);
+    if (mentionedMission?.missionId != null) {
+      selectMissionById(mentionedMission.missionId);
+    }
+    const missionId =
+      mentionedMission?.missionId ??
+      useMissionStore.getState().activeMission?.id ??
+      null;
 
     const abort = new AbortController();
     abortRef.current = abort;
@@ -125,7 +194,18 @@ export default function ChatInput() {
       chatMode,
       missionId
     );
-  }, [input, isStreaming, addUserMessage, handleSSEEvent, selectedModel, pendingAttachments, workspaceFiles, chatMode]);
+  }, [
+    input,
+    isStreaming,
+    addUserMessage,
+    handleSSEEvent,
+    selectedModel,
+    pendingAttachments,
+    workspaceFiles,
+    chatMode,
+    scopeChips,
+    selectMissionById,
+  ]);
 
   const handleStop = () => {
     abortRef.current?.abort();
@@ -133,17 +213,14 @@ export default function ChatInput() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Mention picker owns Enter / arrows while open
+    if (showMention && (e.key === "Enter" || e.key === "Tab" || e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Escape")) {
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const autoResize = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const el = e.target;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
-    setInput(el.value);
   };
 
   // Drag and drop handlers
@@ -238,22 +315,69 @@ export default function ChatInput() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
     const val = el.value;
     setInput(val);
-    // Check if user just typed @
     const cursorPos = el.selectionStart;
     const textBefore = val.slice(0, cursorPos);
-    const atMatch = textBefore.match(/@(\w*)$/);
-    setShowMention(!!atMatch);
+    // Allow query after @ until whitespace (missions/VMs filter as you type)
+    const atMatch = textBefore.match(/@([^\s@]*)$/);
+    if (atMatch) {
+      setShowMention(true);
+      setMentionQuery(atMatch[1] || "");
+    } else {
+      setShowMention(false);
+      setMentionQuery("");
+    }
   };
 
-  const handleMentionSelect = (item: string) => {
+  const handleMentionSelect = (item: MentionSelection) => {
     const cursorPos = textareaRef.current?.selectionStart || input.length;
     const textBefore = input.slice(0, cursorPos);
     const textAfter = input.slice(cursorPos);
-    const replaced = textBefore.replace(/@\w*$/, `@${item} `);
+    const replaced = textBefore.replace(/@[^\s@]*$/, `${item.insertText} `);
     setInput(replaced + textAfter);
     setShowMention(false);
-    textareaRef.current?.focus();
+    setMentionQuery("");
+
+    if (item.kind === "mission" || item.kind === "vm") {
+      const kind = item.kind;
+      setScopeChips((prev) => {
+        const withoutDup = prev.filter((c) => c.id !== item.id);
+        // One mission chip at a time (Flight Deck single scope)
+        const cleared =
+          kind === "mission"
+            ? withoutDup.filter((c) => c.kind !== "mission")
+            : withoutDup;
+        const next: ScopeChip = {
+          id: item.id,
+          kind,
+          label: item.label,
+          missionId: item.missionId,
+          vmId: item.vmId,
+          hostIp: item.hostIp,
+          sshUsername: item.sshUsername,
+        };
+        return [...cleared, next];
+      });
+      if (kind === "mission" && item.missionId != null) {
+        const m = useMissionStore.getState().missions.find((x) => x.id === item.missionId);
+        if (m) setActiveMission(m);
+        else selectMissionById(item.missionId);
+      }
+    }
+
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const pos = replaced.length;
+      el.setSelectionRange(pos, pos);
+    });
   };
+
+  const canSend =
+    !!input.trim() ||
+    pendingAttachments.length > 0 ||
+    workspaceFiles.length > 0 ||
+    scopeChips.length > 0;
 
   return (
     <div
@@ -272,6 +396,40 @@ export default function ChatInput() {
           <div className="flex items-center justify-center gap-2 mb-2 text-amber-400/70 text-[11px]" role="status" aria-live="polite">
             <Shield size={12} className="animate-pulse" />
             <span>Awaiting your decision on the pending command…</span>
+          </div>
+        )}
+
+        {/* @mention scope chips (Mission / VM) */}
+        {scopeChips.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2" role="list" aria-label="Mentioned Mission or VM">
+            {scopeChips.map((chip) => (
+              <div
+                key={chip.id}
+                role="listitem"
+                className={cn(
+                  "flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-md text-[11px] border",
+                  chip.kind === "mission"
+                    ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300"
+                    : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                )}
+              >
+                <span className="text-[9px] uppercase tracking-wide opacity-70">
+                  {chip.kind}
+                </span>
+                <span className="max-w-[180px] truncate font-medium">@{chip.label}</span>
+                {chip.hostIp && (
+                  <span className="text-[10px] opacity-60 truncate max-w-[100px]">{chip.hostIp}</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setScopeChips((prev) => prev.filter((c) => c.id !== chip.id))}
+                  className="ml-0.5 opacity-50 hover:opacity-100 transition-opacity"
+                  aria-label={`Remove @${chip.label}`}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -381,8 +539,16 @@ export default function ChatInput() {
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={isWaitingApproval ? "Approve or skip the command above\u2026" : workspaceFiles.length > 0 ? `Ask about the attached file${workspaceFiles.length > 1 ? "s" : ""}\u2026 (\u21b5 send)` : "Message AIPiloty... (@ to mention files)"}
+            placeholder={
+              isWaitingApproval
+                ? "Approve or skip the command above…"
+                : workspaceFiles.length > 0
+                  ? `Ask about the attached file${workspaceFiles.length > 1 ? "s" : ""}… (↵ send)`
+                  : "Message AIPiloty… (@ Mission, VM, or files)"
+            }
             aria-label="Chat message input"
+            aria-autocomplete="list"
+            aria-expanded={showMention}
             rows={1}
             disabled={isWaitingApproval}
             className={cn(
@@ -398,7 +564,14 @@ export default function ChatInput() {
           {/* @-mention dropdown */}
           {showMention && (
             <div className="absolute left-12 bottom-16 z-50">
-              <ContextMention onSelect={handleMentionSelect} onClose={() => setShowMention(false)} />
+              <ContextMention
+                query={mentionQuery}
+                onSelect={handleMentionSelect}
+                onClose={() => {
+                  setShowMention(false);
+                  setMentionQuery("");
+                }}
+              />
             </div>
           )}
 
@@ -428,11 +601,11 @@ export default function ChatInput() {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={(!input.trim() && pendingAttachments.length === 0 && workspaceFiles.length === 0) || isWaitingApproval}
+                disabled={!canSend || isWaitingApproval}
                 aria-label="Send message"
                 className={cn(
                   "p-2 rounded-lg transition-all",
-                  (input.trim() || pendingAttachments.length > 0 || workspaceFiles.length > 0) && !isWaitingApproval
+                  canSend && !isWaitingApproval
                     ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-500/20"
                     : "bg-gray-700/50 text-gray-500 cursor-not-allowed"
                 )}
