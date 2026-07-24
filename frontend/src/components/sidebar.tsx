@@ -29,7 +29,7 @@ const NAV_GROUPS = [
   {
     label: "Infrastructure",
     items: [
-      { href: "/deployments", icon: Rocket, tKey: "nav.deployments" },
+      { href: "/deployments", icon: Rocket, tKey: "nav.missionBoard", label: "Mission Board" },
       { href: "/vms", icon: Server, tKey: "nav.vms" },
     ],
   },
@@ -167,7 +167,7 @@ export default function Sidebar({ onNavigate, onOpenSettings }: SidebarProps) {
                 {group.label}
               </p>
             )}
-            {group.items.map(({ href, icon: Icon, tKey }) => {
+            {group.items.map(({ href, icon: Icon, tKey, label }) => {
               const active = pathname === href || (href !== "/" && pathname.startsWith(href));
               return (
                 <Link
@@ -187,7 +187,7 @@ export default function Sidebar({ onNavigate, onOpenSettings }: SidebarProps) {
                     <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-indigo-500" />
                   )}
                   <Icon size={18} className={cn(active && "text-indigo-500 dark:text-indigo-400")} />
-                  {!collapsed && <span>{t(tKey)}</span>}
+                  {!collapsed && <span>{label || t(tKey)}</span>}
                 </Link>
               );
             })}
@@ -284,7 +284,7 @@ export default function Sidebar({ onNavigate, onOpenSettings }: SidebarProps) {
       {!collapsed && (
         <div className="p-3 border-t border-gray-200/60 dark:border-gray-800/50 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-600">
           <Sparkles size={10} className="text-indigo-400" />
-          <span>AIPiloty v1.0 · Ollama</span>
+          <span>AIPiloty v1.0 · OpenRouter → Ollama</span>
         </div>
       )}
     </aside>

@@ -178,3 +178,50 @@ async def test_generate_image_tool_needs_input_vs_error():
     with patch("app.main.app_state", {"image_service": mock_svc}):
         err = await tool.execute(prompt="x")
     assert err.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_tool_coerces_null_width_height():
+    """LLMs often pass width/height: null — must not crash with int(None)."""
+    from app.services.tools.documents.tools import GenerateImage
+
+    class _Doc:
+        async def generate_image(self, **kw):
+            return {"success": False, "error": "unused"}
+
+    tool = GenerateImage(_Doc())
+    ok = ImageResult(
+        success=True,
+        relative_path="generated/test.png",
+        model="gpt-image-1",
+        provider="openai",
+        generation_time_ms=1,
+    )
+    mock_svc = MagicMock()
+    mock_svc.generate = AsyncMock(return_value=ok)
+
+    with patch("app.main.app_state", {"image_service": mock_svc}):
+        out = await tool.execute(
+            prompt="HTML course cover",
+            model="gpt-image-1",
+            width=None,
+            height=None,
+            steps=None,
+        )
+
+    assert out.error is None
+    assert out.output["success"] is True
+    kwargs = mock_svc.generate.await_args.kwargs
+    assert kwargs["width"] == 1024
+    assert kwargs["height"] == 1024
+    assert kwargs["steps"] == 20
+    assert kwargs["model"] == "gpt-image-1"
+
+
+def test_openai_pick_size_for_gpt_image():
+    from app.services.image import OpenAIImagesProvider
+
+    assert OpenAIImagesProvider._pick_size(1024, 1024, "gpt-image-1") == "1024x1024"
+    assert OpenAIImagesProvider._pick_size(1792, 1024, "gpt-image-1") == "1536x1024"
+    assert OpenAIImagesProvider._pick_size(1024, 1792, "gpt-image-1") == "1024x1536"
+    assert OpenAIImagesProvider._pick_size(1792, 1024, "dall-e-3") == "1792x1024"

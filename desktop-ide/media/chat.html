@@ -23,7 +23,10 @@
       --warn: var(--vscode-editorWarning-foreground, #cca700);
       --error: var(--vscode-errorForeground, #f48771);
       --ok: var(--vscode-testing-iconPassed, #73c991);
-      --dropdown: var(--vscode-dropdown-background, #252526);
+      --menu-bg: var(--vscode-menu-background, #252526);
+      --menu-fg: var(--vscode-menu-foreground, #cccccc);
+      --menu-sel: var(--vscode-menu-selectionBackground, #094771);
+      --menu-border: var(--vscode-menu-border, #454545);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -64,10 +67,18 @@
       display: flex; flex-direction: column; gap: 12px;
     }
     #empty {
-      margin: auto; text-align: center; max-width: 300px; color: var(--muted); padding: 24px 8px;
+      margin: auto; text-align: center; max-width: 320px; color: var(--muted); padding: 24px 8px;
     }
     #empty h2 { color: var(--fg); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-    #empty p { font-size: 12px; line-height: 1.5; margin-bottom: 16px; }
+    #empty p { font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+    #empty .tip {
+      font-size: 11px; color: var(--muted); margin-bottom: 16px;
+      background: var(--widget); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    }
+    #empty kbd {
+      font-family: inherit; font-size: 10px; border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 5px; background: var(--input-bg);
+    }
     .suggestions { display: flex; flex-direction: column; gap: 6px; }
     .suggestion {
       text-align: left; background: var(--widget); border: 1px solid var(--border);
@@ -114,58 +125,158 @@
     .plan-card h3 { font-size: 12px; margin-bottom: 8px; color: var(--fg); }
     .plan-card li { margin: 4px 0 4px 16px; color: var(--muted); }
 
+    .image-choice-card {
+      align-self: stretch; background: color-mix(in srgb, #6366f1 12%, var(--widget));
+      border: 1px solid color-mix(in srgb, #6366f1 35%, var(--border));
+      border-radius: 10px; padding: 12px 14px; font-size: 12px;
+    }
+    .image-choice-card h3 { font-size: 13px; margin: 0 0 6px; color: var(--fg); }
+    .image-choice-card p { margin: 0 0 10px; color: var(--muted); line-height: 1.4; }
+    .image-choice-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    .image-choice-btn {
+      border: 1px solid var(--border); background: var(--widget); color: var(--fg);
+      border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 12px;
+    }
+    .image-choice-btn:hover { border-color: #818cf8; }
+    .image-choice-btn.locked { border-style: dashed; opacity: 0.85; }
+
+    /* ── Cursor-style composer ── */
     #composer {
-      border-top: 1px solid var(--border); padding: 10px 12px 12px;
-      display: flex; flex-direction: column; gap: 8px;
+      border-top: 1px solid var(--border);
+      padding: 10px 12px 12px;
+      background: var(--bg);
+      position: relative;
     }
     #composer-box {
-      background: var(--input-bg); border: 1px solid var(--border);
-      border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px;
-      position: relative;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
     #composer-box:focus-within { border-color: var(--accent); }
     #input {
       width: 100%; background: transparent; border: none; color: var(--input-fg);
-      font: inherit; resize: none; min-height: 44px; max-height: 140px; outline: none; line-height: 1.45;
+      font: inherit; resize: none; min-height: 48px; max-height: 160px;
+      outline: none; line-height: 1.45;
     }
-    #composer-actions { display: flex; align-items: center; gap: 8px; position: relative; }
+    #composer-toolbar {
+      display: flex; align-items: center; gap: 6px;
+    }
+
+    /* Mode trigger — Cursor pill */
+    #mode-wrap { position: relative; }
     #mode-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      background: transparent; border: 1px solid var(--border); color: var(--fg);
-      border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-family: inherit;
-    }
-    #mode-btn:hover { background: var(--list-hover); }
-    #mode-menu {
-      display: none; position: absolute; bottom: 36px; left: 0; min-width: 220px;
-      background: var(--dropdown); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 20; padding: 4px; overflow: hidden;
-    }
-    #mode-menu.open { display: block; }
-    .mode-item {
-      display: flex; align-items: flex-start; gap: 8px; width: 100%;
-      background: transparent; border: none; color: var(--fg); text-align: left;
-      padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: inherit;
-    }
-    .mode-item:hover { background: var(--list-hover); }
-    .mode-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-    .mode-item .check { width: 14px; color: var(--accent); }
-    .mode-item .meta { display: flex; flex-direction: column; gap: 2px; }
-    .mode-item .title { font-size: 12px; font-weight: 600; }
-    .mode-item .desc { font-size: 11px; color: var(--muted); }
-    #mcp-link, #send, #stop {
-      border: none; border-radius: 6px; padding: 5px 10px; font-size: 12px;
+      display: inline-flex; align-items: center; gap: 5px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--fg);
+      border-radius: 999px;
+      padding: 4px 8px 4px 6px;
+      font-size: 12px; font-weight: 600;
       cursor: pointer; font-family: inherit;
+      line-height: 1;
     }
-    #mcp-link {
-      margin-left: auto; background: transparent; color: var(--muted); border: 1px solid var(--border);
+    #mode-btn:hover, #mode-wrap.open #mode-btn {
+      background: var(--list-hover);
+      border-color: var(--border);
     }
-    #mcp-link:hover { color: var(--fg); background: var(--list-hover); }
+    #mode-btn .mode-icon { font-size: 14px; line-height: 1; opacity: 0.9; }
+    #mode-btn .chevron {
+      font-size: 9px; color: var(--muted); margin-left: 1px;
+    }
+
+    /* Floating mode menu (opens upward like Cursor) */
+    #mode-menu {
+      display: none;
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 6px);
+      min-width: 220px;
+      background: var(--menu-bg);
+      color: var(--menu-fg);
+      border: 1px solid var(--menu-border);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+      padding: 4px;
+      z-index: 50;
+    }
+    #mode-wrap.open #mode-menu { display: block; }
+    .mode-item {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%;
+      border: none; background: transparent;
+      color: var(--menu-fg);
+      text-align: left;
+      padding: 8px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+    }
+    .mode-item:hover, .mode-item:focus {
+      background: var(--menu-sel);
+      outline: none;
+    }
+    .mode-item .mi-icon {
+      width: 18px; text-align: center; font-size: 14px; opacity: 0.9;
+    }
+    .mode-item .mi-label { flex: 1; font-weight: 500; }
+    .mode-item .mi-kbd {
+      font-size: 11px; color: var(--muted);
+      font-family: inherit;
+    }
+    .mode-item .mi-check {
+      width: 14px; color: var(--ok); font-size: 12px;
+      visibility: hidden;
+    }
+    .mode-item.active .mi-check { visibility: visible; }
+    .mode-item .mi-desc {
+      display: none;
+    }
+
+    #provider-chip {
+      border: none; background: transparent; color: var(--muted);
+      font-size: 11px; padding: 4px 6px; border-radius: 6px;
+      cursor: default; font-family: inherit; max-width: 110px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #toolbar-spacer { flex: 1; }
+    #mcp-mini {
+      border: none; background: transparent; color: var(--muted);
+      padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12px;
+      font-family: inherit;
+    }
+    #mcp-mini:hover { background: var(--list-hover); color: var(--fg); }
+
+    #send, #stop {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: none; cursor: pointer; display: inline-flex;
+      align-items: center; justify-content: center;
+      font-size: 14px; line-height: 1; font-family: inherit;
+      padding: 0;
+    }
     #send { background: var(--btn-bg); color: var(--btn-fg); }
     #send:hover { background: var(--btn-hover); }
-    #send:disabled { opacity: 0.45; cursor: not-allowed; }
-    #stop { display: none; background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    #send:disabled { opacity: 0.4; cursor: not-allowed; }
+    #stop {
+      display: none; background: transparent; color: var(--fg);
+      border: 1px solid var(--border);
+    }
     body.streaming #send { display: none; }
-    body.streaming #stop { display: inline-block; }
+    body.streaming #stop { display: inline-flex; }
+
+    #mode-hint-row {
+      font-size: 10px; color: var(--muted);
+      padding: 0 2px; margin-top: 6px;
+      display: flex; gap: 8px; align-items: center;
+    }
+    #mode-hint-row kbd {
+      font-size: 9px; border: 1px solid var(--border);
+      border-radius: 3px; padding: 0 4px; font-family: inherit;
+    }
   </style>
 </head>
 <body>
@@ -180,11 +291,15 @@
   <div id="messages">
     <div id="empty">
       <h2>AIPiloty</h2>
-      <p>Cursor-style modes: Agent · Ask · Plan · Debug. Tools and MCP run through your local backend.</p>
+      <p>One chat — Cursor-style Agent / Ask / Plan / Debug.</p>
+      <div class="tip">
+        Click <strong>∞ Agent</strong> below to switch modes, or press <kbd>⇧ Tab</kbd>.
+        Close the right-hand Chat panel if it appears — use this sidebar only.
+      </div>
       <div class="suggestions">
-        <button class="suggestion" data-q="Explain this project structure">Explain this project</button>
-        <button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX">Plan: improve chat UX</button>
-        <button class="suggestion" data-q="Debug why the backend only uses Ollama">Debug provider chain</button>
+        <button class="suggestion" data-q="Explain this project structure" data-mode="ask">Ask: explain this project</button>
+        <button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX" data-mode="plan">Plan: improve chat UX</button>
+        <button class="suggestion" data-q="Debug why the backend only uses Ollama" data-mode="debug">Debug: provider chain</button>
       </div>
     </div>
   </div>
@@ -192,30 +307,50 @@
   <div id="composer">
     <div id="composer-box">
       <textarea id="input" rows="2" placeholder="Describe a task for the agent…"></textarea>
-      <div id="composer-actions">
-        <button id="mode-btn" type="button" aria-haspopup="menu">∞ Agent ▾</button>
-        <div id="mode-menu" role="menu">
-          <button class="mode-item active" data-mode="agent">
-            <span class="check">✓</span>
-            <span class="meta"><span class="title">∞ Agent</span><span class="desc">Tools, terminal, file edits</span></span>
+      <div id="composer-toolbar">
+        <div id="mode-wrap">
+          <button type="button" id="mode-btn" aria-haspopup="menu" aria-expanded="false" title="Switch mode (⇧Tab)">
+            <span class="mode-icon" id="mode-icon">∞</span>
+            <span id="mode-label">Agent</span>
+            <span class="chevron">▾</span>
           </button>
-          <button class="mode-item" data-mode="ask">
-            <span class="check"></span>
-            <span class="meta"><span class="title">Ask</span><span class="desc">Answers only — no tools</span></span>
-          </button>
-          <button class="mode-item" data-mode="plan">
-            <span class="check"></span>
-            <span class="meta"><span class="title">Plan</span><span class="desc">Step-by-step plan before edits</span></span>
-          </button>
-          <button class="mode-item" data-mode="debug">
-            <span class="check"></span>
-            <span class="meta"><span class="title">Debug</span><span class="desc">Investigate errors & root cause</span></span>
-          </button>
+          <div id="mode-menu" role="menu" aria-label="Chat mode">
+            <button type="button" class="mode-item active" data-mode="agent" role="menuitem">
+              <span class="mi-icon">∞</span>
+              <span class="mi-label">Agent</span>
+              <span class="mi-kbd"></span>
+              <span class="mi-check">✓</span>
+            </button>
+            <button type="button" class="mode-item" data-mode="plan" role="menuitem">
+              <span class="mi-icon">☰</span>
+              <span class="mi-label">Plan</span>
+              <span class="mi-kbd"></span>
+              <span class="mi-check">✓</span>
+            </button>
+            <button type="button" class="mode-item" data-mode="debug" role="menuitem">
+              <span class="mi-icon">🐞</span>
+              <span class="mi-label">Debug</span>
+              <span class="mi-kbd"></span>
+              <span class="mi-check">✓</span>
+            </button>
+            <button type="button" class="mode-item" data-mode="ask" role="menuitem">
+              <span class="mi-icon">💬</span>
+              <span class="mi-label">Ask</span>
+              <span class="mi-kbd"></span>
+              <span class="mi-check">✓</span>
+            </button>
+          </div>
         </div>
-        <button id="mcp-link" type="button">MCP</button>
-        <button id="send">Send</button>
-        <button id="stop">Stop</button>
+        <span id="provider-chip" title="Provider chain">Auto</span>
+        <span id="toolbar-spacer"></span>
+        <button type="button" id="mcp-mini" title="MCP Servers">MCP</button>
+        <button type="button" id="send" title="Send">↑</button>
+        <button type="button" id="stop" title="Stop">■</button>
       </div>
+    </div>
+    <div id="mode-hint-row">
+      <span id="mode-hint">Agent can use tools (terminal, files)</span>
+      <span style="margin-left:auto"><kbd>⇧Tab</kbd> cycle modes</span>
     </div>
   </div>
 
@@ -227,63 +362,118 @@
     let tokens = '';
     let activeToolCard = null;
 
-    const modeLabels = {
-      agent: '∞ Agent ▾',
-      ask: 'Ask ▾',
-      plan: 'Plan ▾',
-      debug: 'Debug ▾',
-    };
-    const placeholders = {
-      agent: 'Describe a task for the agent…',
-      ask: 'Ask a question…',
-      plan: 'What should we plan?',
-      debug: 'What is broken? Paste errors…',
+    const MODE_ORDER = ['agent', 'plan', 'debug', 'ask'];
+    const MODE_META = {
+      agent: {
+        icon: '✦',
+        label: 'Agent',
+        placeholder: 'Plan, search, build anything',
+        hint: 'Plan, search, make edits, run commands',
+      },
+      plan: {
+        icon: '☰',
+        label: 'Plan',
+        placeholder: 'Plan and design before coding...',
+        hint: 'Generate an implementation plan',
+      },
+      debug: {
+        icon: '🐞',
+        label: 'Debug',
+        placeholder: 'Debug and troubleshoot issues...',
+        hint: 'Pinpoint the root cause of an issue',
+      },
+      ask: {
+        icon: '💬',
+        label: 'Ask',
+        placeholder: 'Ask questions without making changes...',
+        hint: 'Answer questions without making edits',
+      },
     };
 
-    function setMode(m) {
-      mode = m;
-      document.getElementById('mode-btn').textContent = modeLabels[m] || m;
-      document.getElementById('input').placeholder = placeholders[m] || 'Ask…';
-      document.querySelectorAll('.mode-item').forEach((b) => {
-        const on = b.dataset.mode === m;
-        b.classList.toggle('active', on);
-        b.querySelector('.check').textContent = on ? '✓' : '';
-      });
-      document.getElementById('mode-menu').classList.remove('open');
-    }
-
+    const modeWrap = document.getElementById('mode-wrap');
     const modeBtn = document.getElementById('mode-btn');
     const modeMenu = document.getElementById('mode-menu');
+
+    function setMode(m, opts) {
+      if (!MODE_META[m]) return;
+      mode = m;
+      const meta = MODE_META[m];
+      document.getElementById('mode-icon').textContent = meta.icon;
+      document.getElementById('mode-label').textContent = meta.label;
+      document.getElementById('input').placeholder = meta.placeholder;
+      document.getElementById('mode-hint').textContent = meta.hint;
+      document.querySelectorAll('.mode-item').forEach((b) => {
+        b.classList.toggle('active', b.dataset.mode === m);
+      });
+      closeModeMenu();
+      if (!opts || opts.notify !== false) {
+        vscode.postMessage({ type: 'modeChanged', mode: m });
+      }
+    }
+
+    function openModeMenu() {
+      modeWrap.classList.add('open');
+      modeBtn.setAttribute('aria-expanded', 'true');
+    }
+    function closeModeMenu() {
+      modeWrap.classList.remove('open');
+      modeBtn.setAttribute('aria-expanded', 'false');
+    }
+    function toggleModeMenu() {
+      if (modeWrap.classList.contains('open')) closeModeMenu();
+      else openModeMenu();
+    }
+
+    function cycleMode() {
+      const i = MODE_ORDER.indexOf(mode);
+      setMode(MODE_ORDER[(i + 1) % MODE_ORDER.length]);
+    }
+
     modeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      modeMenu.classList.toggle('open');
+      toggleModeMenu();
     });
     document.querySelectorAll('.mode-item').forEach((b) => {
-      b.addEventListener('click', () => setMode(b.dataset.mode));
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setMode(b.dataset.mode);
+      });
     });
-    document.addEventListener('click', () => modeMenu.classList.remove('open'));
+    document.addEventListener('click', () => closeModeMenu());
+    modeMenu.addEventListener('click', (e) => e.stopPropagation());
 
     document.querySelectorAll('.suggestion').forEach((b) => {
       b.addEventListener('click', () => {
+        if (b.dataset.mode) setMode(b.dataset.mode, { notify: false });
         document.getElementById('input').value = b.dataset.q;
         send();
       });
     });
     document.getElementById('new-chat').onclick = () => vscode.postMessage({ type: 'newSession' });
     document.getElementById('open-mcp').onclick = () => vscode.postMessage({ type: 'openMcp' });
-    document.getElementById('mcp-link').onclick = () => vscode.postMessage({ type: 'openMcp' });
+    document.getElementById('mcp-mini').onclick = () => vscode.postMessage({ type: 'openMcp' });
     document.getElementById('send').onclick = send;
     document.getElementById('stop').onclick = () => vscode.postMessage({ type: 'cancel' });
 
     const input = document.getElementById('input');
     input.addEventListener('keydown', (e) => {
+      // Cursor: Shift+Tab cycles Agent → Plan → Debug → Ask
+      if (e.key === 'Tab' && e.shiftKey) {
+        e.preventDefault();
+        cycleMode();
+        return;
+      }
+      if (e.key === 'Escape') {
+        closeModeMenu();
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         send();
       }
       requestAnimationFrame(() => {
         input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
       });
     });
 
@@ -297,7 +487,7 @@
       if (!text || streaming) return;
       hideEmpty();
       input.value = '';
-      input.style.height = '44px';
+      input.style.height = '48px';
       appendUser(text);
       vscode.postMessage({ type: 'send', text, mode });
     }
@@ -305,7 +495,7 @@
     function appendUser(text) {
       const el = document.createElement('div');
       el.className = 'msg user';
-      el.innerHTML = '<div class="role">You</div><div class="body"></div>';
+      el.innerHTML = '<div class="role">You · ' + MODE_META[mode].label + '</div><div class="body"></div>';
       el.querySelector('.body').textContent = text;
       document.getElementById('messages').appendChild(el);
       scroll();
@@ -329,7 +519,6 @@
     function appendToken(t) {
       if (!assistantEl) startAssistant();
       tokens += t;
-      // Avoid dumping raw tool JSON into the transcript
       if (looksLikeToolJson(tokens) && tokens.length < 4000) {
         assistantEl.querySelector('.body').innerHTML =
           '<em style="color:var(--muted)">Working with tools…</em>';
@@ -367,7 +556,6 @@
         let pretty = String(detail);
         try {
           const parsed = JSON.parse(pretty);
-          // Prefer human summary over raw success blobs
           if (parsed && typeof parsed === 'object') {
             if (parsed.output && parsed.output.message) pretty = parsed.output.message;
             else if (parsed.message) pretty = parsed.message;
@@ -377,6 +565,56 @@
         card.querySelector('.body').textContent = pretty.slice(0, 4000);
       }
       activeToolCard = null;
+      scroll();
+    }
+
+    function renderImageChoice(root, tool) {
+      if (activeToolCard) {
+        activeToolCard.classList.remove('running');
+        activeToolCard.classList.add('ok');
+        activeToolCard.querySelector('.status').textContent = 'Needs choice';
+        activeToolCard = null;
+      }
+      const el = document.createElement('div');
+      el.className = 'image-choice-card';
+      const title = root.status === 'needs_api_key' ? 'Image API key required' : 'Choose an image model';
+      const msg = root.message || (root.status === 'needs_api_key'
+        ? 'Add an OpenAI or Gemini key in Settings.'
+        : 'Select a model to continue.');
+      let buttons = '';
+      const options = Array.isArray(root.options) ? root.options : [];
+      if (root.status === 'needs_api_key' || !options.length) {
+        buttons = '<button class="image-choice-btn" data-action="settings">Open Image Providers</button>';
+      } else {
+        buttons = options.map((o) => {
+          const locked = o.available === false;
+          const label = escapeHtml(String(o.label || o.id));
+          if (locked) {
+            return '<button class="image-choice-btn locked" data-action="settings">🔒 ' + label + '</button>';
+          }
+          return '<button class="image-choice-btn" data-action="model" data-model="' +
+            escapeHtml(String(o.id)) + '">' + label + '</button>';
+        }).join('');
+      }
+      el.innerHTML =
+        '<h3>' + escapeHtml(title) + '</h3><p>' + escapeHtml(String(msg)) + '</p><div class="image-choice-btns">' +
+        buttons + '</div>';
+      el.querySelectorAll('button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.action === 'settings') {
+            vscode.postMessage({ type: 'openImageSettings' });
+            return;
+          }
+          const model = btn.dataset.model;
+          if (!model) return;
+          const prompt =
+            'Generate the image now using model "' + model + '" (do not ask again).';
+          hideEmpty();
+          appendUser(prompt);
+          vscode.postMessage({ type: 'send', text: prompt, mode });
+        });
+      });
+      document.getElementById('messages').appendChild(el);
       scroll();
     }
 
@@ -415,6 +653,25 @@
         .replace(/\n/g, '<br>');
     }
 
+    function renderEmpty() {
+      document.getElementById('messages').innerHTML =
+        '<div id="empty"><h2>AIPiloty</h2>' +
+        '<p>One chat — Cursor-style Agent / Ask / Plan / Debug.</p>' +
+        '<div class="tip">Click <strong>∞ Agent</strong> below to switch modes, or press <kbd>⇧ Tab</kbd>.</div>' +
+        '<div class="suggestions">' +
+        '<button class="suggestion" data-q="Explain this project structure" data-mode="ask">Ask: explain this project</button>' +
+        '<button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX" data-mode="plan">Plan: improve chat UX</button>' +
+        '<button class="suggestion" data-q="Debug why the backend only uses Ollama" data-mode="debug">Debug: provider chain</button>' +
+        '</div></div>';
+      document.querySelectorAll('.suggestion').forEach((b) => {
+        b.addEventListener('click', () => {
+          if (b.dataset.mode) setMode(b.dataset.mode, { notify: false });
+          document.getElementById('input').value = b.dataset.q;
+          send();
+        });
+      });
+    }
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       switch (msg.type) {
@@ -434,6 +691,16 @@
           toolCard(msg.tool, 'start');
           break;
         case 'tool_output':
+          if (msg.tool === 'generate_image') {
+            try {
+              const parsed = typeof msg.output === 'string' ? JSON.parse(msg.output) : msg.output;
+              const root = parsed && parsed.output && typeof parsed.output === 'object' ? parsed.output : parsed;
+              if (root && (root.status === 'needs_model_choice' || root.status === 'needs_api_key')) {
+                renderImageChoice(root, msg.tool);
+                break;
+              }
+            } catch { /* fall through */ }
+          }
           toolCard(msg.tool, 'ok', msg.output);
           break;
         case 'tool_error':
@@ -450,6 +717,14 @@
           }
           break;
         case 'provider_switched':
+          if (msg.active) {
+            document.getElementById('provider-chip').textContent = String(msg.active);
+          }
+          break;
+        case 'provider_status':
+          if (msg.label) {
+            document.getElementById('provider-chip').textContent = String(msg.label);
+          }
           break;
         case 'error':
           setStreaming(false);
@@ -461,19 +736,7 @@
           tokens = '';
           break;
         case 'newSession':
-          document.getElementById('messages').innerHTML =
-            '<div id="empty"><h2>AIPiloty</h2><p>Agent · Ask · Plan · Debug</p>' +
-            '<div class="suggestions">' +
-            '<button class="suggestion" data-q="Explain this project structure">Explain this project</button>' +
-            '<button class="suggestion" data-q="Make a plan to improve the desktop IDE chat UX">Plan: improve chat UX</button>' +
-            '<button class="suggestion" data-q="Debug why the backend only uses Ollama">Debug provider chain</button>' +
-            '</div></div>';
-          document.querySelectorAll('.suggestion').forEach((b) => {
-            b.addEventListener('click', () => {
-              document.getElementById('input').value = b.dataset.q;
-              send();
-            });
-          });
+          renderEmpty();
           assistantEl = null;
           tokens = '';
           setStreaming(false);
@@ -481,6 +744,9 @@
         case 'externalSend':
           hideEmpty();
           appendUser(msg.text || '');
+          break;
+        case 'setMode':
+          if (msg.mode) setMode(String(msg.mode), { notify: false });
           break;
         case 'context':
           if (msg.filename) {
@@ -494,7 +760,7 @@
       }
     });
 
-    setMode('agent');
+    setMode('agent', { notify: false });
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>

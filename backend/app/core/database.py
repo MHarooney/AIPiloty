@@ -111,6 +111,11 @@ async def init_db() -> None:
                 ("trigger_type",          "VARCHAR(20)"),
                 ("cron_expression",       "VARCHAR(64)"),
                 ("webhook_secret",        "VARCHAR(64)"),
+                ("public_url",            "VARCHAR(512)"),
+                ("api_url",               "VARCHAR(512)"),
+                ("backend_container",     "VARCHAR(256)"),
+                ("pipeline_profile",      "VARCHAR(64)"),
+                ("mission_meta",          "TEXT"),
             ]
             for col_name, col_type in new_cols:
                 if col_name not in existing:

@@ -145,7 +145,10 @@ class GenerateImage(BaseTool):
         "Call WITHOUT model first unless the user already named one. "
         "If the tool returns status=needs_model_choice, reply with ONE short line only "
         "(e.g. 'Choose an image model below.') — do NOT list models in chat text; the UI shows "
-        "clickable options. Never invent API keys."
+        "clickable options. Never invent API keys. "
+        "width/height/steps are OPTIONAL — omit them (defaults apply). Never pass null. "
+        "After the user picks a model, call again with prompt + model only. "
+        "On failure: retry once with prompt+model only — do NOT switch to web_search, generate_pdf, or other tools."
     )
     parameters = [
         Param("prompt", "string", "Detailed description of the image to generate"),
@@ -163,9 +166,27 @@ class GenerateImage(BaseTool):
             required=False,
         ),
         Param("negative_prompt", "string", "What to avoid in the image", required=False),
-        Param("width", "integer", "Image width in pixels (default 1024)", required=False),
-        Param("height", "integer", "Image height in pixels (default 1024)", required=False),
-        Param("steps", "integer", "Number of generation steps for local models (default 20)", required=False),
+        Param(
+            "width",
+            "integer",
+            "Optional image width in pixels (default 1024). Omit rather than passing null.",
+            required=False,
+            default=1024,
+        ),
+        Param(
+            "height",
+            "integer",
+            "Optional image height in pixels (default 1024). Omit rather than passing null.",
+            required=False,
+            default=1024,
+        ),
+        Param(
+            "steps",
+            "integer",
+            "Optional generation steps for local models (default 20). Omit rather than null.",
+            required=False,
+            default=20,
+        ),
         Param("filename", "string", "Output filename", required=False),
     ]
     risk_level = "medium"
@@ -175,18 +196,35 @@ class GenerateImage(BaseTool):
     def __init__(self, svc: DocumentGeneratorService):
         self._svc = svc
 
+    @staticmethod
+    def _int_arg(value: Any, default: int, *, lo: int = 64, hi: int = 2048) -> int:
+        """Coerce tool args; LLMs often pass null/'' for optional ints."""
+        if value is None or value == "":
+            return default
+        try:
+            return max(lo, min(int(value), hi))
+        except (TypeError, ValueError):
+            return default
+
     async def execute(self, **kw: Any) -> ToolResult:
         try:
             from ....main import app_state
 
+            width = self._int_arg(kw.get("width"), 1024)
+            height = self._int_arg(kw.get("height"), 1024)
+            steps = self._int_arg(kw.get("steps"), 20, lo=1, hi=50)
+            prompt = kw.get("prompt") or ""
+            if not isinstance(prompt, str) or not prompt.strip():
+                return ToolResult(error="generate_image requires a non-empty prompt")
+
             image_service = app_state.get("image_service")
             if image_service:
                 result = await image_service.generate(
-                    prompt=kw.get("prompt", ""),
-                    negative_prompt=kw.get("negative_prompt", ""),
-                    width=int(kw.get("width", 1024)),
-                    height=int(kw.get("height", 1024)),
-                    steps=int(kw.get("steps", 20)),
+                    prompt=prompt.strip(),
+                    negative_prompt=kw.get("negative_prompt") or "",
+                    width=width,
+                    height=height,
+                    steps=steps,
                     model=kw.get("model"),
                     provider=kw.get("provider"),
                 )
@@ -217,7 +255,12 @@ class GenerateImage(BaseTool):
                     )
                 return ToolResult(error=result.error)
 
-            r = await self._svc.generate_image(**kw)
+            r = await self._svc.generate_image(
+                prompt=prompt.strip(),
+                width=width,
+                height=height,
+                filename=kw.get("filename"),
+            )
             if r.get("success"):
                 return ToolResult(output=r)
             return ToolResult(error=r.get("error", "Image generation failed"))

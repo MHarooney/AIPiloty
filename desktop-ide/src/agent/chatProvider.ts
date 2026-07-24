@@ -76,6 +76,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           case "openMcp":
             await vscode.commands.executeCommand("aipiloty.openMcpSettings");
             break;
+          case "openImageSettings":
+            await vscode.commands.executeCommand("aipiloty.chat.openImageSettings");
+            break;
           case "ready":
             // Inject current editor context
             this.sendEditorContext();
@@ -260,8 +263,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const htmlPath = vscode.Uri.joinPath(this.context.extensionUri, "media", "chat.html");
     if (fs.existsSync(htmlPath.fsPath)) {
       let html = fs.readFileSync(htmlPath.fsPath, "utf-8");
-      // Replace asset URIs
+      // Replace asset URIs + bust webview cache when HTML changes
       html = html.replace(/\{\{cspSource\}\}/g, webview.cspSource);
+      const stamp = fs.statSync(htmlPath.fsPath).mtimeMs.toString(36);
+      html = html.replace("</head>", `<!-- v:${stamp} --></head>`);
       return html;
     }
     // Inline fallback

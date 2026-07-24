@@ -79,6 +79,11 @@ echo "  The AIPiloty sidebar will be available in the Activity Bar."
 echo "  Press Cmd+K on selected code for AI inline edit."
 echo ""
 
+# Patch Electron .app so Dock / double-click never shows blank Electron welcome
+if [[ -f "$AIPILOTY_DIR/scripts/patch-electron-app.sh" ]]; then
+  bash "$AIPILOTY_DIR/scripts/patch-electron-app.sh" || true
+fi
+
 # VSCODE_DEV=1 tells Code OSS it's running in dev mode
 export VSCODE_DEV=1
 export VSCODE_EXTENSIONS="$FORK_DIR/extensions"

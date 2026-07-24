@@ -78,6 +78,10 @@ export class KeychainService {
     return this.get("aipiloty.gemini_api_key");
   }
 
+  async getOpenRouterKey(): Promise<string> {
+    return this.get("aipiloty.openrouter_api_key");
+  }
+
   /** Build the request headers for the AIPiloty backend. */
   async backendHeaders(): Promise<Record<string, string>> {
     return {

@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
     auto_approve: bool = False
     model: Optional[str] = None  # Override default model for this request
     mode: Optional[str] = "auto"  # ask | agent | auto | plan | debug
+    mission_id: Optional[int] = None  # Active Mission (deployment id) for Flight Deck scope
 
 
 class ToolCallOut(BaseModel):
@@ -100,6 +101,12 @@ class DeploymentCreate(BaseModel):
     trigger_type: str = "manual"
     cron_expression: Optional[str] = None
     webhook_secret: Optional[str] = None
+    # Mission Control
+    public_url: Optional[str] = None
+    api_url: Optional[str] = None
+    backend_container: Optional[str] = None
+    pipeline_profile: Optional[str] = None
+    mission_meta: Optional[str] = None
 
 
 class DeploymentOut(BaseModel):
@@ -129,6 +136,11 @@ class DeploymentOut(BaseModel):
     trigger_type: str = "manual"
     cron_expression: Optional[str] = None
     webhook_secret: Optional[str] = None
+    public_url: Optional[str] = None
+    api_url: Optional[str] = None
+    backend_container: Optional[str] = None
+    pipeline_profile: Optional[str] = None
+    mission_meta: Optional[str] = None
 
 
 class DeploymentRunOut(BaseModel):

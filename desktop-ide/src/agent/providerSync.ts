@@ -14,10 +14,12 @@ export async function syncProviderKeysToBackend(
   const claude = await keychain.getAnthropicKey();
   const openai = await keychain.getOpenAIKey();
   const gemini = await keychain.getGeminiKey();
+  const openrouter = await keychain.getOpenRouterKey();
 
   if (claude) payload.anthropic_api_key = claude;
   if (openai) payload.openai_api_key = openai;
   if (gemini) payload.gemini_api_key = gemini;
+  if (openrouter) payload.openrouter_api_key = openrouter;
 
   if (!Object.keys(payload).length) return;
 
@@ -56,7 +58,7 @@ export async function maybePromptForCloudKeys(
     const chain = Array.isArray(health.chain) ? health.chain : [];
     if (chain.length === 1 && chain[0] === "ollama") {
       const pick = await vscode.window.showInformationMessage(
-        "AIPiloty is on Ollama only. Add Claude / OpenAI / Gemini for stronger Agent mode.",
+        "AIPiloty is on Ollama only. Add OpenRouter / Claude / OpenAI / Gemini for cloud models.",
         "Configure Keys",
         "Later"
       );

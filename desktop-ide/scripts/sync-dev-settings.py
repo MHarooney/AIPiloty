@@ -53,6 +53,8 @@ def main() -> None:
             "aipiloty.autoApproveAgentTools": False,
             "editor.accessibilitySupport": "auto",
             "workbench.startupEditor": "welcomePage",
+            "workbench.secondarySideBar.defaultVisibility": "visible",
+            "chat.commandCenter.enabled": True,
         }
     )
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)

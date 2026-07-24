@@ -13,6 +13,7 @@ import { headers as apiHeaders } from "@/lib/api-headers";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100/api/v1";
 
 const PROVIDER_LABELS: Record<string, string> = {
+  openrouter: "OpenRouter",
   claude: "Claude",
   openai: "GPT-4",
   gemini: "Gemini",
@@ -20,10 +21,11 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 const PROVIDER_COLORS: Record<string, string> = {
+  openrouter: "text-teal-400",
   claude: "text-amber-400",
   openai: "text-green-400",
   gemini: "text-blue-400",
-  ollama: "text-purple-400",
+  ollama: "text-violet-400",
 };
 
 interface ProviderHealth {

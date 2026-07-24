@@ -1,0 +1,134 @@
+{
+  "title": "Welcome to Settings Sync",
+  "undo": [],
+  "review": [],
+  "folderish": [
+    {
+      "cls": "codicon codicon-folder-two",
+      "text": "",
+      "parent": "cursor-button cursor-button-secondary cursor-button-secondary-clickable empty-screen-button",
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(20, 20, 20)",
+      "radius": "0px",
+      "display": "block"
+    },
+    {
+      "cls": "fade-in-fast typeahead-popover mentions-menu typeahead-popover mentions-menu",
+      "text": "Agent Plan Debug Multitask Ask",
+      "parent": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(20, 20, 20)",
+      "radius": "6px",
+      "display": "flex"
+    }
+  ],
+  "imgs": [],
+  "composerSample": [
+    {
+      "tag": "BODY",
+      "cls": "glass-typography-refresh unifiedsidebarhidden sidebarvisible",
+      "text": "Welcome to Settings Sync Agents Window HOME LAUNCHPAD CLOUD PATCHES CLOUD WORKSPACES Welcome to Sett",
+      "role": null,
+      "aria": ""
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-bar editor empty",
+      "text": " Plan, Build, / for skills, @ for context Agent Auto",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-find-widget-container",
+      "text": "",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-input-blur-wrapper",
+      "text": " Plan, Build, / for skills, @ for context Agent Auto",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "aislash-editor-grid",
+      "text": " Plan, Build, / for skills, @ for context",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "aislash-editor-input",
+      "text": " ",
+      "role": "textbox",
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "aislash-editor-placeholder",
+      "text": "Plan, Build, / for skills, @ for context",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-bar-input-buttons",
+      "text": "Agent Auto",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-unified-dropdown !border-none !rounded-full ",
+      "text": "Agent",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "button-container composer-button-area",
+      "text": "",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "part unifiedsidebar left",
+      "text": "New Agent⌘NCustomizeMAMahmoud Al-HaroonPro+ Plan",
+      "role": "none",
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "unified-agents-sidebar",
+      "text": "New Agent⌘NCustomizeMAMahmoud Al-HaroonPro+ Plan",
+      "role": "complementary",
+      "aria": "Unified agents sidebar"
+    },
+    {
+      "tag": "DIV",
+      "cls": "unified-agents-sidebar-content",
+      "text": "New Agent⌘NCustomizeMAMahmoud Al-HaroonPro+ Plan",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "anysphere-icon-button bg-[transparent] border-none text-[var(--cursor-text-primary)] flex w-4 items-center justify-center agent-sidebar-togg",
+      "text": "",
+      "role": null,
+      "aria": null
+    },
+    {
+      "tag": "DIV",
+      "cls": "composer-unified-context-menu-item rounded flex flex-col px-1.5 py-[2px] min-w-0 group  cursor-pointer [&_*]:!cursor-pointer",
+      "text": "Agent",
+      "role": null,
+      "aria": null
+    }
+  ],
+  "hasFilesHeader": false
+}

@@ -269,8 +269,18 @@ class OpenAIImagesProvider(ImageProvider):
         return bool(self._api_key)
 
     @staticmethod
-    def _pick_size(width: int, height: int) -> str:
+    def _pick_size(width: int, height: int, model: str) -> str:
+        """Return a size string valid for the given OpenAI image model."""
         ratio = width / max(height, 1)
+        mid = (model or "").lower()
+        # gpt-image-1 / gpt-image-1-mini: 1024x1024 | 1536x1024 | 1024x1536 | auto
+        if mid.startswith("gpt-image"):
+            if ratio >= 1.3:
+                return "1536x1024"
+            if ratio <= 0.77:
+                return "1024x1536"
+            return "1024x1024"
+        # dall-e-3: 1024x1024 | 1792x1024 | 1024x1792
         if ratio >= 1.4:
             return "1792x1024"
         if ratio <= 0.75:
@@ -289,7 +299,7 @@ class OpenAIImagesProvider(ImageProvider):
         full_prompt = prompt.strip()
         if negative_prompt:
             full_prompt = f"{full_prompt}. Avoid: {negative_prompt[:200]}"
-        size = self._pick_size(width, height)
+        size = self._pick_size(width, height, self._model)
         # Newer Images API rejects response_format; prefer URL then download.
         payload: dict[str, Any] = {
             "model": self._model,
@@ -326,6 +336,7 @@ class OpenAIImagesProvider(ImageProvider):
                 self._model = "gpt-image-1"
                 payload.pop("quality", None)
                 payload["model"] = "gpt-image-1"
+                payload["size"] = self._pick_size(width, height, "gpt-image-1")
                 resp = await client.post(
                     f"{self._base_url}/images/generations",
                     headers=headers,

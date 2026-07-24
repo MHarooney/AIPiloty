@@ -26,7 +26,8 @@ class ConfigUpdate(BaseModel):
     anthropic_api_key: Optional[str] = Field(None, max_length=512)
     openai_api_key: Optional[str] = Field(None, max_length=512)
     gemini_api_key: Optional[str] = Field(None, max_length=512)
-    # Provider priority chain (comma-separated, e.g. "claude,openai,gemini,ollama")
+    openrouter_api_key: Optional[str] = Field(None, max_length=512)
+    # Provider priority chain (comma-separated, e.g. "openrouter,claude,openai,gemini,ollama")
     provider_priority: Optional[str] = None
 
 
@@ -106,6 +107,10 @@ async def get_config(identity: str = Depends(require_auth)):
             "active": active,
             "chain": chain,
             "providers": {
+                "openrouter": {
+                    "configured": bool((settings.openrouter_api_key or "").strip()),
+                    "key_hint": _key_hint(settings.openrouter_api_key),
+                },
                 "claude": {
                     "configured": bool((settings.anthropic_api_key or "").strip()),
                     "key_hint": _key_hint(settings.anthropic_api_key),
@@ -149,6 +154,7 @@ async def update_config(body: ConfigUpdate, identity: str = Depends(require_auth
         ("anthropic_api_key", body.anthropic_api_key),
         ("openai_api_key", body.openai_api_key),
         ("gemini_api_key", body.gemini_api_key),
+        ("openrouter_api_key", body.openrouter_api_key),
     ):
         if _raw is not None:
             status = _apply_llm_key(settings, _attr, _raw)
@@ -198,6 +204,24 @@ async def list_models(identity: str = Depends(require_auth)):
             "family": m.get("details", {}).get("family", ""),
         })
     return {"models": models, "current": llm.model}
+
+
+@router.get("/llm-models")
+async def list_llm_models(identity: str = Depends(require_auth)):
+    """Model picker catalog — Auto + models for configured providers only."""
+    from ...main import app_state
+    from ...services.llm.llm_catalog import list_llm_models as build_catalog
+
+    ollama_names: list[str] = []
+    orchestrator = app_state.get("orchestrator")
+    if orchestrator and getattr(orchestrator, "_llm", None):
+        try:
+            raw = await orchestrator._llm.list_models()
+            ollama_names = [m.get("name", "") for m in raw if m.get("name")]
+        except Exception:
+            ollama_names = []
+
+    return build_catalog(ollama_models=ollama_names)
 
 
 # ── Service management ────────────────────────────────────────────────────────

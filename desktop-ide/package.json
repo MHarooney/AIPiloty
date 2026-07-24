@@ -41,7 +41,7 @@
         "id": "aipiloty.agent",
         "name": "aipiloty",
         "fullName": "AIPiloty",
-        "description": "Agent \u00b7 Ask \u00b7 Plan \u00b7 Debug (Claude \u2192 OpenAI \u2192 Gemini \u2192 Ollama)",
+        "description": "Plan, Build, / for skills, @ for context",
         "isDefault": true,
         "sampleRequest": "Explain the selected code and suggest improvements",
         "commands": [
@@ -59,7 +59,11 @@
           },
           {
             "name": "agent",
-            "description": "Force Agent mode (tools, terminal, file edits)"
+            "description": "Agent mode (tools, terminal, file edits)"
+          },
+          {
+            "name": "ask",
+            "description": "Ask mode \u2014 read-only answers"
           },
           {
             "name": "plan",
@@ -72,7 +76,9 @@
         ],
         "locations": [
           "panel",
-          "editing-session"
+          "editor",
+          "editing-session",
+          "notebook"
         ]
       }
     ],
@@ -123,6 +129,72 @@
         "title": "Open MCP Servers",
         "category": "AIPiloty",
         "icon": "$(server-process)"
+      },
+      {
+        "command": "aipiloty.selectChatMode",
+        "title": "Agent",
+        "category": "AIPiloty",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "aipiloty.selectChatModel",
+        "title": "Select Chat Model",
+        "category": "AIPiloty",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "aipiloty.setChatModel",
+        "title": "Set Chat Model",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.listChatModels",
+        "title": "List Chat Models",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.cycleChatMode",
+        "title": "Cycle Chat Mode",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.setMode.agent",
+        "title": "Agent",
+        "category": "AIPiloty",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "aipiloty.setMode.ask",
+        "title": "Ask",
+        "category": "AIPiloty",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aipiloty.setMode.plan",
+        "title": "Plan",
+        "category": "AIPiloty",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "aipiloty.setMode.debug",
+        "title": "Debug",
+        "category": "AIPiloty",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "aipiloty.chat.chooseImageModel",
+        "title": "Choose Image Model",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.chat.pickImageModel",
+        "title": "Pick Image Model",
+        "category": "AIPiloty"
+      },
+      {
+        "command": "aipiloty.chat.openImageSettings",
+        "title": "Open Image Provider Settings",
+        "category": "AIPiloty"
       }
     ],
     "keybindings": [
@@ -134,8 +206,25 @@
       },
       {
         "command": "aipiloty.openChat",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "!editorTextFocus"
+      },
+      {
+        "command": "aipiloty.openChat",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i"
+      },
+      {
+        "command": "aipiloty.openChat",
         "key": "ctrl+shift+a",
         "mac": "cmd+shift+a"
+      },
+      {
+        "command": "aipiloty.cycleChatMode",
+        "key": "ctrl+shift+.",
+        "mac": "cmd+shift+.",
+        "when": "true"
       }
     ],
     "menus": {
@@ -159,13 +248,13 @@
       ],
       "view/title": [
         {
-          "command": "aipiloty.newChat",
-          "when": "view == aipiloty.chatView",
+          "command": "aipiloty.openMcpSettings",
+          "when": "view == aipiloty.mcpView",
           "group": "navigation"
         },
         {
           "command": "aipiloty.restartBackend",
-          "when": "view == aipiloty.chatView",
+          "when": "view == aipiloty.mcpView",
           "group": "navigation"
         }
       ]
@@ -174,19 +263,13 @@
       "activitybar": [
         {
           "id": "aipiloty-sidebar",
-          "title": "AIPiloty",
+          "title": "AIPiloty MCP",
           "icon": "media/icon-sidebar.svg"
         }
       ]
     },
     "views": {
       "aipiloty-sidebar": [
-        {
-          "type": "webview",
-          "id": "aipiloty.chatView",
-          "name": "Chat",
-          "retainContextWhenHidden": true
-        },
         {
           "type": "webview",
           "id": "aipiloty.mcpView",
@@ -252,7 +335,7 @@
             "vscode"
           ],
           "default": "vscode",
-          "description": "Primary Chat UI: AIPiloty sidebar (VS Code\u2013style Ask/Edit/Agent) or built-in VS Code Chat panel."
+          "description": "Primary Chat UI. vscode = right-side stock Chat (recommended for agent). sidebar = legacy left webview (MCP lives there now)."
         },
         "aipiloty.autoApproveTools": {
           "type": "boolean",
@@ -263,6 +346,22 @@
           "type": "boolean",
           "default": false,
           "description": "In Agent mode, auto-approve high-risk tools. When false, show Approve/Deny (recommended)."
+        },
+        "aipiloty.chatMode": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "ask",
+            "plan",
+            "debug"
+          ],
+          "default": "agent",
+          "description": "Default Agent mode for the right-side Chat panel when no /slash command is used."
+        },
+        "aipiloty.chatModel": {
+          "type": "string",
+          "default": "auto",
+          "description": "Default LLM selection. Use \"auto\" for ProviderRouter failover across configured providers (OpenRouter, Claude, OpenAI, Gemini, Ollama)."
         }
       }
     },

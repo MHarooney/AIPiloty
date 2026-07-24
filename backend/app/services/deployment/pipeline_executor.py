@@ -11,18 +11,20 @@ from typing import Any, AsyncGenerator
 logger = logging.getLogger(__name__)
 
 _STEP_LABELS: dict[str, str] = {
-    "git_pull":     "Git Pull",
-    "docker_login": "Docker Login",
-    "docker_build": "Docker Build",
-    "docker_tag":   "Docker Tag",
-    "docker_push":  "Docker Push",
-    "ssh_pull":     "Pull on Server",
-    "ssh_stop":     "Stop & Remove",
-    "ssh_run":      "Start Container",
+    "git_pull":      "Git Pull",
+    "docker_login":  "Docker Login",
+    "docker_build":  "Docker Build",
+    "docker_tag":    "Docker Tag",
+    "docker_push":   "Docker Push",
+    "ssh_pull":      "Pull on Server",
+    "ssh_stop":      "Stop & Remove",
+    "ssh_run":       "Start Container",
+    "ssh_git_pull":  "Git Pull on VM",
+    "docker_restart": "Restart Container",
 }
 
 # Long-running steps that need a higher SSH timeout
-_LONG_STEPS = {"ssh_pull", "docker_build", "docker_push"}
+_LONG_STEPS = {"ssh_pull", "docker_build", "docker_push", "ssh_git_pull"}
 
 
 def _emit(event: dict) -> bytes:
@@ -36,15 +38,40 @@ class PipelineExecutor:
         self._ssh = ssh_executor
 
     def _plan_steps(self, dep: dict) -> list[str]:
-        steps: list[str] = []
+        """Plan the concrete execution steps for a mission's `pipeline_profile`.
 
-        # Local steps — only if source directory is specified
+        `inspect_only` never runs (read-only probes cover it), `docker_remote_only`
+        and `backend_pull_restart` never touch this host's local Docker/git — they
+        are pure SSH operations against the mission's own VM + container, so a
+        misconfigured local build environment can't leak into a remote-only run.
+        Anything else (including the legacy/unset `docker_full`) keeps the original
+        heuristic: infer steps from whichever fields are actually populated.
+        """
+        profile = (dep.get("pipeline_profile") or "").strip().lower()
+
+        if profile == "inspect_only":
+            return []
+
+        if profile == "docker_remote_only":
+            if dep.get("vm_credential_id") and dep.get("container_name") and dep.get("dockerhub_image"):
+                return ["ssh_pull", "ssh_stop", "ssh_run"]
+            return []
+
+        if profile == "backend_pull_restart":
+            steps: list[str] = []
+            if dep.get("vm_credential_id") and dep.get("deploy_path") and dep.get("branch"):
+                steps.append("ssh_git_pull")
+            if dep.get("vm_credential_id") and self._target_container(dep, profile):
+                steps.append("docker_restart")
+            return steps
+
+        # docker_full (default / legacy missions) — unchanged heuristic behavior
+        steps: list[str] = []
         if dep.get("deploy_path") and dep.get("branch"):
             steps.append("git_pull")
 
-        # Docker build/push — only if image names are configured
         if dep.get("dockerhub_image"):
-            from ..core.config import get_settings
+            from ...core.config import get_settings
             s = get_settings()
             if s.docker_hub_username and s.docker_hub_password:
                 steps.append("docker_login")
@@ -52,11 +79,22 @@ class PipelineExecutor:
                 steps.extend(["docker_build", "docker_tag"])
             steps.append("docker_push")
 
-        # Remote SSH deployment — only if VM + container name are set
         if dep.get("vm_credential_id") and dep.get("container_name"):
             steps.extend(["ssh_pull", "ssh_stop", "ssh_run"])
 
         return steps
+
+    @staticmethod
+    def _target_container(dep: dict, profile: str) -> str | None:
+        """Resolve which container a remote-only step should act on.
+
+        `backend_pull_restart` targets the mission's `backend_container` (falling
+        back to `container_name` for single-container missions); every other
+        profile targets `container_name` directly.
+        """
+        if profile == "backend_pull_restart":
+            return dep.get("backend_container") or dep.get("container_name")
+        return dep.get("container_name")
 
     async def stream_run(
         self,
@@ -66,7 +104,12 @@ class PipelineExecutor:
         """Async generator that yields SSE-encoded bytes for a full pipeline run."""
         steps = self._plan_steps(dep_config)
         if not steps:
-            yield _emit({"type": "error", "message": "No pipeline steps configured for this deployment. Set dockerhub_image and vm_credential_id at minimum."})
+            profile = (dep_config.get("pipeline_profile") or "").strip().lower()
+            if profile == "inspect_only":
+                msg = "This Mission's pipeline profile is inspect_only — use the read-only Probe instead of Run Pipeline."
+            else:
+                msg = "No pipeline steps configured for this mission. Check VM, container, and image fields for the selected pipeline profile."
+            yield _emit({"type": "error", "message": msg})
             yield b"data: [DONE]\n\n"
             return
 
@@ -112,7 +155,7 @@ class PipelineExecutor:
                 yield line
 
         elif step == "docker_login":
-            from ..core.config import get_settings
+            from ...core.config import get_settings
             s = get_settings()
             async for line in self._local_cmd([
                 "docker", "login",
@@ -145,7 +188,7 @@ class PipelineExecutor:
             async for line in self._local_cmd(["docker", "push", target]):
                 yield line
 
-        elif step in ("ssh_pull", "ssh_stop", "ssh_run"):
+        elif step in ("ssh_pull", "ssh_stop", "ssh_run", "ssh_git_pull", "docker_restart"):
             vm = await self._get_vm(dep["vm_credential_id"])
             if not vm:
                 raise RuntimeError(f"VM {dep['vm_credential_id']} not found in database")
@@ -172,10 +215,19 @@ class PipelineExecutor:
                     f"SSH command failed (rc={result.get('return_code')}): {output[:400]}"
                 )
 
-    @staticmethod
-    def _build_ssh_command(step: str, dep: dict) -> str:
+    def _build_ssh_command(self, step: str, dep: dict) -> str:
+        profile = (dep.get("pipeline_profile") or "").strip().lower()
+        container = self._target_container(dep, profile) or dep.get("container_name")
+
+        if step == "ssh_git_pull":
+            branch = dep.get("branch") or "main"
+            path = dep["deploy_path"]
+            return f"cd {path} && git fetch origin {branch} && git reset --hard origin/{branch}"
+
+        if step == "docker_restart":
+            return f"docker restart {container}"
+
         image = f"{dep['dockerhub_image']}:{dep.get('dockerhub_tag') or 'latest'}"
-        container = dep["container_name"]
 
         if step == "ssh_pull":
             return f"docker pull {image}"
@@ -231,8 +283,8 @@ class PipelineExecutor:
             )
 
     async def _get_vm(self, vm_id: int):
-        from ..core.database import async_session_factory
-        from ..models.vm import VMCredential
+        from ...core.database import async_session_factory
+        from ...models.vm import VMCredential
         from sqlalchemy import select
 
         async with async_session_factory() as session:
@@ -247,8 +299,8 @@ class PipelineExecutor:
         log: str,
         duration: float,
     ) -> None:
-        from ..core.database import async_session_factory
-        from ..models.deployment import DeploymentRun, RunStatus, Deployment, DeploymentStatus
+        from ...core.database import async_session_factory
+        from ...models.deployment import DeploymentRun, RunStatus, Deployment, DeploymentStatus
         from sqlalchemy import select
 
         async with async_session_factory() as session:

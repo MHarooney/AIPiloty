@@ -1,21 +1,17 @@
 /**
  * AIPiloty Desktop IDE — VS Code Extension Entry Point
  *
- * Architecture:
- *   VS Code (Code OSS shell)
- *     └─ AIPiloty extension (this file)
- *          ├─ SidecarManager  — spawns/monitors FastAPI backend + Ollama
- *          ├─ KeychainService — VS Code SecretStorage (OS-backed)
- *          ├─ ChatViewProvider — sidebar webview (chat UI)
- *          ├─ InlineEditProvider — Cmd-K inline edit command
- *          └─ ProviderStatusBar — status bar item (active LLM + health)
+ * Primary AI agent UI = stock VS Code Chat (right panel) via chat participant.
+ * Left activity bar = MCP settings only.
+ * Modes = status bar + ⇧Tab + /agent /ask /plan /debug (Chat composer has no extension API for a Cursor dropdown).
  */
 
 import * as vscode from "vscode";
 import { SidecarManager } from "./sidecar";
 import { KeychainService } from "./keychain";
-import { ChatViewProvider } from "./agent/chatProvider";
 import { registerChatParticipant } from "./agent/chatParticipant";
+import { ChatModeService } from "./agent/chatMode";
+import { ChatModelService } from "./agent/chatModel";
 import { registerLanguageModelProvider } from "./agent/languageModel";
 import { registerInlineEditCommand } from "./agent/inlineEdit";
 import { ProviderStatusBar } from "./agent/providerStatus";
@@ -24,6 +20,7 @@ import { registerMcpSettings } from "./agent/mcpSettings";
 
 let sidecar: SidecarManager | undefined;
 let statusBar: ProviderStatusBar | undefined;
+let modelService: ChatModelService | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration("aipiloty");
@@ -55,37 +52,101 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar = new ProviderStatusBar(backendUrl, keychain);
   context.subscriptions.push(statusBar);
 
-  const chatProvider = new ChatViewProvider(context, backendUrl, keychain);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider("aipiloty.chatView", chatProvider, {
-      webviewOptions: { retainContextWhenHidden: true },
-    })
-  );
+  const chatMode = new ChatModeService(context);
+  const cfgMode = config.get<string>("chatMode", "agent");
+  if (cfgMode === "ask" || cfgMode === "plan" || cfgMode === "debug" || cfgMode === "agent") {
+    chatMode.setMode(cfgMode);
+  }
 
-  // VS Code requires a default LM before any chat participant can run.
+  modelService = new ChatModelService(context, backendUrl, keychain);
+
   registerLanguageModelProvider(context, backendUrl, keychain);
-  registerChatParticipant(context, backendUrl, keychain);
+  registerChatParticipant(context, backendUrl, keychain, chatMode, modelService);
   registerMcpSettings(context, backendUrl, keychain);
 
+  // Open the right-side Chat as the primary agent surface
+  void (async () => {
+    const ui = vscode.workspace
+      .getConfiguration("aipiloty")
+      .get<string>("preferredChatUi", "vscode");
+    if (ui === "vscode") {
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.open");
+      } catch {
+        /* ignore on older builds */
+      }
+    }
+  })();
+
   context.subscriptions.push(
+    vscode.commands.registerCommand("aipiloty.selectChatMode", async () => {
+      await chatMode.pick();
+    }),
+    vscode.commands.registerCommand("aipiloty.selectChatModel", async () => {
+      await modelService?.pick();
+    }),
+    vscode.commands.registerCommand(
+      "aipiloty.setChatModel",
+      async (id?: string, label?: string) => {
+        if (typeof id === "string" && id.trim() && modelService) {
+          modelService.setModel(id.trim(), typeof label === "string" ? label : undefined);
+        }
+      }
+    ),
+    vscode.commands.registerCommand("aipiloty.listChatModels", async () => {
+      return modelService ? modelService.listForComposer() : [{ id: "auto", label: "Auto", is_default: true }];
+    }),
+
+    vscode.commands.registerCommand("aipiloty.cycleChatMode", () => {
+      const next = chatMode.cycle();
+      vscode.window.setStatusBarMessage(`AIPiloty mode → ${next}`, 2000);
+    }),
+
+    vscode.commands.registerCommand("aipiloty.setMode.agent", () => {
+      chatMode.setMode("agent");
+    }),
+    vscode.commands.registerCommand("aipiloty.setMode.ask", () => {
+      chatMode.setMode("ask");
+    }),
+    vscode.commands.registerCommand("aipiloty.setMode.plan", () => {
+      chatMode.setMode("plan");
+    }),
+    vscode.commands.registerCommand("aipiloty.setMode.debug", () => {
+      chatMode.setMode("debug");
+    }),
+
     vscode.commands.registerCommand("aipiloty.openChat", async () => {
       const ui = vscode.workspace
         .getConfiguration("aipiloty")
         .get<string>("preferredChatUi", "vscode");
-      if (ui !== "sidebar") {
+      if (ui === "sidebar") {
         try {
-          await vscode.commands.executeCommand("workbench.action.chat.open");
-          return;
+          await vscode.commands.executeCommand("workbench.view.extension.aipiloty-sidebar");
         } catch {
-          /* fall through to Activity Bar view */
+          /* ignore */
         }
+        return;
       }
-      await vscode.commands.executeCommand("workbench.view.extension.aipiloty-sidebar");
-      await vscode.commands.executeCommand("aipiloty.chatView.focus");
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.open");
+      } catch {
+        vscode.window.showInformationMessage(
+          "Open Chat from the Activity Bar (speech bubble) or View → Chat."
+        );
+      }
     }),
 
-    vscode.commands.registerCommand("aipiloty.newChat", () => {
-      chatProvider.newSession();
+    vscode.commands.registerCommand("aipiloty.newChat", async () => {
+      try {
+        await vscode.commands.executeCommand("aipiloty.clearBackendChatSession");
+      } catch {
+        /* registered with chat participant */
+      }
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.newChat");
+      } catch {
+        await vscode.commands.executeCommand("workbench.action.chat.open");
+      }
     }),
 
     vscode.commands.registerCommand("aipiloty.restartBackend", async () => {
@@ -115,47 +176,74 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand("aipiloty.setProviderKey", async () => {
-      const providers = ["claude (Anthropic)", "openai (OpenAI)", "gemini (Google)"];
-      const pick = await vscode.window.showQuickPick(providers, {
-        placeHolder: "Select provider to configure",
-      });
+      const providers = [
+        {
+          id: "openrouter",
+          label: "OpenRouter (multi-model gateway)",
+          configKey: "openrouter_api_key",
+          secretKey: "aipiloty.openrouter_api_key",
+          placeholder: "sk-or-v1-…",
+        },
+        {
+          id: "claude",
+          label: "Claude (Anthropic)",
+          configKey: "anthropic_api_key",
+          secretKey: "aipiloty.claude_api_key",
+          placeholder: "sk-ant-…",
+        },
+        {
+          id: "openai",
+          label: "OpenAI",
+          configKey: "openai_api_key",
+          secretKey: "aipiloty.openai_api_key",
+          placeholder: "sk-…",
+        },
+        {
+          id: "gemini",
+          label: "Gemini (Google)",
+          configKey: "gemini_api_key",
+          secretKey: "aipiloty.gemini_api_key",
+          placeholder: "AIza…",
+        },
+      ];
+      const pick = await vscode.window.showQuickPick(
+        providers.map((p) => ({
+          label: p.label,
+          description: p.id,
+          p,
+        })),
+        { placeHolder: "Select provider to configure" }
+      );
       if (!pick) return;
 
-      const providerId = pick.split(" ")[0] as "claude" | "openai" | "gemini";
-      const keyMap: Record<string, string> = {
-        claude: "anthropic_api_key",
-        openai: "openai_api_key",
-        gemini: "gemini_api_key",
-      };
-      const placeholderMap: Record<string, string> = {
-        claude: "sk-ant-…",
-        openai: "sk-…",
-        gemini: "AIza…",
-      };
-
+      const { id, configKey, secretKey, placeholder } = pick.p;
       const key = await vscode.window.showInputBox({
-        prompt: `Enter API key for ${providerId}`,
-        placeHolder: placeholderMap[providerId],
+        prompt: `Enter API key for ${id}`,
+        placeHolder: placeholder,
         password: true,
         validateInput: (v) => (v.length < 8 ? "Key too short" : null),
       });
       if (!key) return;
 
-      await keychain.set(`aipiloty.${providerId}_api_key`, key);
+      await keychain.set(secretKey, key);
 
       try {
-        await fetch(`${backendUrl}/api/v1/config`, {
+        const res = await fetch(`${backendUrl}/api/v1/config`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": await keychain.getApiKey(),
           },
-          body: JSON.stringify({ [keyMap[providerId]]: key }),
+          body: JSON.stringify({ [configKey]: key }),
         });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         vscode.window.showInformationMessage(
-          `${providerId} API key saved. ProviderRouter will use it on the next request.`
+          `${id} API key saved. Model picker will refresh on next open.`
         );
         statusBar?.refresh();
+        modelService?.refresh();
       } catch {
         vscode.window.showWarningMessage(
           "Key saved locally. Could not reach backend to hot-patch — restart backend to apply."
@@ -167,7 +255,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerInlineEditCommand(context, backendUrl, keychain);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("aipiloty.explainSelection", () => {
+    vscode.commands.registerCommand("aipiloty.explainSelection", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
       const text = editor.document.getText(editor.selection);
@@ -175,10 +263,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.showInformationMessage("Select some code first");
         return;
       }
-      chatProvider.sendMessage(
-        `Explain this code:\n\`\`\`${editor.document.languageId}\n${text}\n\`\`\``
-      );
-      void vscode.commands.executeCommand("aipiloty.openChat");
+      chatMode.setMode("ask");
+      await vscode.commands.executeCommand("aipiloty.openChat");
+      // Prefill via chat open with query when supported
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.open", {
+          query: `@aipiloty /ask Explain this code:\n\`\`\`${editor.document.languageId}\n${text}\n\`\`\``,
+          isPartialQuery: false,
+        });
+      } catch {
+        vscode.window.showInformationMessage(
+          "Chat opened in Ask mode — paste your selection or use /ask"
+        );
+      }
     })
   );
 }

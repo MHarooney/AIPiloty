@@ -88,6 +88,13 @@ class Deployment(Base):
     cron_expression = Column(String(64), nullable=True)
     webhook_secret = Column(String(64), nullable=True)       # inbound webhook URL token
 
+    # Mission Control / Flight Deck fields (dynamic — no hardcoded tenants)
+    public_url = Column(String(512), nullable=True)
+    api_url = Column(String(512), nullable=True)
+    backend_container = Column(String(256), nullable=True)
+    pipeline_profile = Column(String(64), nullable=True)  # see mission.PIPELINE_PROFILES
+    mission_meta = Column(Text, nullable=True)  # JSON: ownership, ai_can, you_must, notes
+
     vm_credential = relationship("VMCredential", back_populates="deployments")
     runs = relationship("DeploymentRun", back_populates="deployment", cascade="all, delete-orphan", order_by="DeploymentRun.id.desc()")
 
@@ -136,6 +143,12 @@ class Deployment(Base):
             "trigger_type": self.trigger_type.value if self.trigger_type else "manual",
             "cron_expression": self.cron_expression,
             "webhook_secret": self.webhook_secret,
+            # Mission Control
+            "public_url": self.public_url,
+            "api_url": self.api_url,
+            "backend_container": self.backend_container,
+            "pipeline_profile": self.pipeline_profile,
+            "mission_meta": self.mission_meta,
         }
 
 

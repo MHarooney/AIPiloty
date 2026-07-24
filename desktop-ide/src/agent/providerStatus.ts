@@ -13,15 +13,17 @@ import type { KeychainService } from "../keychain";
 const POLL_INTERVAL_MS = 15_000;
 
 const PROVIDER_ICONS: Record<string, string> = {
-  claude: "$(anthropic)$(sparkle)",
-  openai: "$(openai)",
-  gemini: "$(google)",
+  openrouter: "$(globe)",
+  claude: "$(sparkle)",
+  openai: "$(cloud)",
+  gemini: "$(rocket)",
   ollama: "$(cpu)",
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
+  openrouter: "OpenRouter",
   claude: "Claude",
-  openai: "GPT-4",
+  openai: "GPT",
   gemini: "Gemini",
   ollama: "Ollama (local)",
 };

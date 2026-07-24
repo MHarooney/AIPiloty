@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, DragEvent } from "react";
-import { Send, Square, Shield, ChevronDown, Paperclip, X, FileText, Image as ImageIcon, Mic, MicOff, FileCode, Folder } from "lucide-react";
+import { Send, Square, Shield, Paperclip, X, FileText, Image as ImageIcon, Mic, MicOff, FileCode, Folder } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { streamChat, listModels, uploadAttachment, getWorkspaceFile } from "@/lib/api";
+import { streamChat, uploadAttachment, getWorkspaceFile } from "@/lib/api";
 import { useChatStore, ChatAttachment } from "@/stores/chat-store";
 import { useEditorStore } from "@/stores/editor-store";
+import { useMissionStore } from "@/stores/mission-store";
 import ChatModeToggle from "./chat-mode-toggle";
+import ChatModelPicker from "./chat-model-picker";
 import ContextMention from "./context-mention";
 
 const ACCEPTED_TYPES = "image/png,image/jpeg,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation";
@@ -23,9 +25,6 @@ interface WorkspaceFile {
 
 export default function ChatInput() {
   const [input, setInput] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [models, setModels] = useState<{ name: string; parameter_size: string }[]>([]);
-  const [showModelPicker, setShowModelPicker] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
@@ -35,7 +34,7 @@ export default function ChatInput() {
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isStreaming, sessionKey, addUserMessage, handleSSEEvent } = useChatStore();
+  const { isStreaming, sessionKey, addUserMessage, handleSSEEvent, selectedModel } = useChatStore();
   const pendingAttachments = useChatStore((s) => s.pendingAttachments);
   const addPendingAttachment = useChatStore((s) => s.addPendingAttachment);
   const removePendingAttachment = useChatStore((s) => s.removePendingAttachment);
@@ -55,15 +54,6 @@ export default function ChatInput() {
       useEditorStore.getState().clearExplainSelection();
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
-  }, []);
-
-  // Load available models
-  useEffect(() => {
-    listModels().then((data) => {
-      setModels(data.models);
-    }).catch(() => {
-      toast.error("Could not load models from Ollama. Check your backend connection.");
-    });
   }, []);
 
   const handleFileUpload = useCallback(async (files: FileList | File[]) => {
@@ -116,10 +106,25 @@ export default function ChatInput() {
     setWorkspaceFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
 
+    // Flight Deck: detect incident patterns + scope chat to active Mission
+    useMissionStore.getState().detectIncidentFromText(fullMessage);
+    const missionId = useMissionStore.getState().activeMission?.id ?? null;
+
     const abort = new AbortController();
     abortRef.current = abort;
     const key = useChatStore.getState().ensureSessionKey();
-    streamChat(fullMessage, key, handleSSEEvent, abort.signal, false, selectedModel, attachmentIds, chatMode);
+    const modelPayload = selectedModel === "auto" ? null : selectedModel;
+    streamChat(
+      fullMessage,
+      key,
+      handleSSEEvent,
+      abort.signal,
+      false,
+      modelPayload,
+      attachmentIds,
+      chatMode,
+      missionId
+    );
   }, [input, isStreaming, addUserMessage, handleSSEEvent, selectedModel, pendingAttachments, workspaceFiles, chatMode]);
 
   const handleStop = () => {
@@ -439,42 +444,7 @@ export default function ChatInput() {
         </div>
         <div className="flex items-center justify-between gap-2 mt-2">
           <ChatModeToggle />
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowModelPicker(!showModelPicker)}
-              aria-expanded={showModelPicker}
-              aria-haspopup="listbox"
-              className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-400 transition-colors"
-            >
-              AIPiloty · {selectedModel || "default"} via Ollama
-              {models.length > 1 && <ChevronDown size={10} />}
-            </button>
-            {showModelPicker && models.length > 0 && (
-            <div
-              role="listbox"
-              aria-label="Select model"
-              className="absolute top-full right-0 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-[60] min-w-[200px]"
-            >
-              <button
-                onClick={() => { setSelectedModel(null); setShowModelPicker(false); }}
-                className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-gray-800 transition-colors", !selectedModel && "text-indigo-400")}
-              >
-                Default (server config)
-              </button>
-              {models.map((m) => (
-                <button
-                  key={m.name}
-                  onClick={() => { setSelectedModel(m.name); setShowModelPicker(false); }}
-                  className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-gray-800 transition-colors flex items-center justify-between", selectedModel === m.name && "text-indigo-400")}
-                >
-                  <span>{m.name}</span>
-                  {m.parameter_size && <span className="text-gray-600 ml-2">{m.parameter_size}</span>}
-                </button>
-              ))}
-            </div>
-            )}
-          </div>
+          <ChatModelPicker />
         </div>
       </div>
     </div>

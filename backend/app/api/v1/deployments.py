@@ -167,6 +167,14 @@ async def run_deployment(
 
     dep_config = dep.to_dict()
 
+    # Safety gate: inspect_only Missions are read-only by design — never accept a
+    # Run Pipeline request for them, even if a client bypasses the disabled UI button.
+    if (dep_config.get("pipeline_profile") or "").strip().lower() == "inspect_only":
+        raise HTTPException(
+            400,
+            "This Mission is inspect_only — pipeline runs are disabled. Use the read-only Probe instead.",
+        )
+
     run = DeploymentRun(
         deployment_id=deployment_id,
         trigger=TriggerType.MANUAL,

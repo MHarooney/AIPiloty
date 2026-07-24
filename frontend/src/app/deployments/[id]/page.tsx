@@ -225,7 +225,7 @@ export default function DeploymentDetailPage() {
             onClick={() => router.push("/deployments")}
             className="flex items-center gap-2 text-sm text-gray-500 hover:text-indigo-400 transition-colors"
           >
-            <ArrowLeft size={15} /> Back to Deployments
+            <ArrowLeft size={15} /> Back to Mission Board
           </button>
 
           {loading ? (
@@ -233,19 +233,23 @@ export default function DeploymentDetailPage() {
               <Loader2 size={24} className="animate-spin mr-3" /> Loading…
             </div>
           ) : !deployment ? (
-            <p className="text-center text-gray-500 py-20">Deployment not found</p>
+            <p className="text-center text-gray-500 py-20">Mission not found</p>
           ) : (
             <>
-              {/* Header */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-900/40 p-6">
+              {/* Header — Deploy Run Console */}
+              <div className="rounded-2xl border border-cyan-500/20 bg-gray-900/40 p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-indigo-900/30 flex items-center justify-center">
-                      <Rocket size={22} className="text-indigo-400" />
+                    <div className="w-12 h-12 rounded-xl bg-cyan-900/30 flex items-center justify-center">
+                      <Rocket size={22} className="text-cyan-400" />
                     </div>
                     <div>
+                      <p className="text-[10px] uppercase tracking-widest text-cyan-500/80 mb-0.5">Deploy Run Console</p>
                       <h1 className="text-xl font-bold">{deployment.name}</h1>
-                      <p className="text-sm text-gray-400">{deployment.project_name} · {deployment.environment}</p>
+                      <p className="text-sm text-gray-400">
+                        {deployment.project_name} · {deployment.environment}
+                        {deployment.pipeline_profile ? ` · ${deployment.pipeline_profile}` : ""}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -254,20 +258,28 @@ export default function DeploymentDetailPage() {
                     </button>
                     <button
                       onClick={handleDeploy}
+                      disabled={deployment.pipeline_profile === "inspect_only"}
+                      title={deployment.pipeline_profile === "inspect_only" ? "Inspect-only — use Flight Deck Probe" : "Run pipeline"}
                       className={cn(
-                        "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all",
+                        "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-40",
                         deploying
                           ? "bg-amber-800/30 text-amber-300 border border-amber-700/30"
-                          : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                          : "bg-cyan-600 hover:bg-cyan-500 text-white"
                       )}
                     >
-                      {deploying ? <><Loader2 size={13} className="animate-spin" /> Deploying…</> : <><Zap size={13} /> Deploy Now</>}
+                      {deploying ? <><Loader2 size={13} className="animate-spin" /> Running…</> : <><Zap size={13} /> Run Pipeline</>}
                     </button>
                   </div>
                 </div>
 
                 {/* Config grid */}
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-5">
+                  {deployment.public_url && (
+                    <div className="rounded-xl bg-gray-800/30 p-3 md:col-span-2">
+                      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">Public URL</div>
+                      <a href={deployment.public_url} target="_blank" rel="noreferrer" className="text-sm text-cyan-300 hover:underline truncate block">{deployment.public_url}</a>
+                    </div>
+                  )}
                   {deployment.dockerhub_image && (
                     <div className="rounded-xl bg-gray-800/30 p-3">
                       <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1"><Package size={11} /> DockerHub Image</div>
@@ -276,8 +288,14 @@ export default function DeploymentDetailPage() {
                   )}
                   {deployment.container_name && (
                     <div className="rounded-xl bg-gray-800/30 p-3">
-                      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1"><Terminal size={11} /> Container</div>
+                      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1"><Terminal size={11} /> FE Container</div>
                       <p className="text-sm font-mono text-gray-200">{deployment.container_name}</p>
+                    </div>
+                  )}
+                  {deployment.backend_container && (
+                    <div className="rounded-xl bg-gray-800/30 p-3">
+                      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1"><Terminal size={11} /> BE Container</div>
+                      <p className="text-sm font-mono text-gray-200">{deployment.backend_container}</p>
                     </div>
                   )}
                   {deployment.port_mapping && (
@@ -301,7 +319,7 @@ export default function DeploymentDetailPage() {
                 </div>
               </div>
 
-              {/* Live pipeline */}
+              {/* Live pipeline = Context Runway live view */}
               {pipeline && (
                 <PipelinePanel pipeline={pipeline} onClose={() => setPipeline(null)} />
               )}

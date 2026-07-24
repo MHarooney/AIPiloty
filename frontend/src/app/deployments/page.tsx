@@ -4,15 +4,17 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import AppShell from "@/components/app-shell";
 import {
   getDeployments, createDeployment, updateDeployment, deleteDeployment,
-  streamDeploymentRun, seedDeployments, getVMs,
+  streamDeploymentRun, seedDeployments, getVMs, getPipelineProfiles,
 } from "@/lib/api";
 import {
   Rocket, Plus, Trash2, Loader2, X, ChevronDown, ChevronRight,
   CheckCircle2, XCircle, CircleDot, RefreshCw, Zap, Settings2,
-  GitBranch, Package, Server, Terminal,
+  GitBranch, Package, Server, Terminal, MessageSquare, Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMissionStore } from "@/stores/mission-store";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,11 +27,15 @@ interface Deployment {
   dockerhub_image?: string;
   dockerhub_tag?: string;
   container_name?: string;
+  backend_container?: string;
   port_mapping?: string;
   branch?: string;
   last_deployed_at?: string;
   webhook_secret?: string;
   vm_credential_id?: number;
+  public_url?: string;
+  api_url?: string;
+  pipeline_profile?: string;
 }
 
 interface StepState {
@@ -68,9 +74,10 @@ const DEFAULT_FORM = {
   name: "", project_name: "", environment: "production",
   branch: "main", dockerfile: "Dockerfile", build_platform: "linux/amd64",
   docker_image: "", dockerhub_image: "", dockerhub_tag: "latest",
-  container_name: "", port_mapping: "", docker_network: "",
+  container_name: "", backend_container: "", port_mapping: "", docker_network: "",
   docker_run_extra_args: "--restart unless-stopped",
   vm_credential_id: "", repository_url: "",
+  public_url: "", api_url: "", pipeline_profile: "docker_full",
 };
 
 // ── Step icon helper ─────────────────────────────────────────────────────────
@@ -153,6 +160,8 @@ function DeploymentCard({
   onDelete: (id: number) => void;
   onEdit: (dep: Deployment) => void;
 }) {
+  const router = useRouter();
+  const setActiveMission = useMissionStore((s) => s.setActiveMission);
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -237,6 +246,19 @@ function DeploymentCard({
 
       {/* Meta */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-gray-400">
+        {dep.public_url && (
+          <div className="flex items-center gap-1.5 col-span-2 truncate">
+            <Globe size={11} className="shrink-0 text-cyan-500" />
+            <a href={dep.public_url} target="_blank" rel="noreferrer" className="truncate text-cyan-300/90 hover:underline">
+              {dep.public_url}
+            </a>
+          </div>
+        )}
+        {dep.pipeline_profile && (
+          <div className="col-span-2 text-[10px] text-gray-500">
+            Pipeline: <span className="font-mono text-gray-300">{dep.pipeline_profile}</span>
+          </div>
+        )}
         {dep.dockerhub_image && (
           <div className="flex items-center gap-1.5 col-span-2 truncate">
             <Package size={11} className="shrink-0 text-gray-500" />
@@ -271,10 +293,24 @@ function DeploymentCard({
       {/* Actions */}
       <div className="flex items-center gap-2 mt-1">
         <button
+          onClick={async () => {
+            await useMissionStore.getState().loadMissions();
+            const m = useMissionStore.getState().missions.find((x) => x.id === dep.id);
+            if (m) setActiveMission(m);
+            else setActiveMission({ ...(dep as any), pipeline_steps: [] });
+            router.push("/");
+          }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold bg-cyan-900/30 text-cyan-300 border border-cyan-700/30 hover:bg-cyan-800/40 transition-all"
+          title="Open Flight Deck scoped to this Mission"
+        >
+          <MessageSquare size={13} /> Ask AI
+        </button>
+        <button
           onClick={handleDeploy}
-          disabled={false}
+          disabled={dep.pipeline_profile === "inspect_only"}
+          title={dep.pipeline_profile === "inspect_only" ? "Inspect-only mission — use Probe from Flight Deck" : "Run deploy pipeline"}
           className={cn(
-            "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold transition-all",
+            "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed",
             deploying
               ? "bg-amber-800/30 text-amber-300 border border-amber-700/30 hover:bg-amber-800/40"
               : allSuccess
@@ -291,7 +327,7 @@ function DeploymentCard({
           ) : anyFailed ? (
             <><RefreshCw size={13} /> Retry</>
           ) : (
-            <><Zap size={13} /> Deploy Now</>
+            <><Zap size={13} /> Deploy</>
           )}
         </button>
         <button
@@ -308,9 +344,12 @@ function DeploymentCard({
         </button>
       </div>
 
-      {/* Pipeline panel */}
+      {/* Deploy Run Console (inline) */}
       {pipeline && (
-        <PipelinePanel pipeline={pipeline} onClose={() => setPipeline(null)} />
+        <div>
+          <p className="text-[10px] uppercase tracking-widest text-cyan-500/70 mb-1 px-0.5">Run Console</p>
+          <PipelinePanel pipeline={pipeline} onClose={() => setPipeline(null)} />
+        </div>
       )}
     </div>
   );
@@ -339,14 +378,29 @@ function DeploymentModal({
       dockerhub_image: initial.dockerhub_image ?? "",
       dockerhub_tag: initial.dockerhub_tag ?? "latest",
       container_name: initial.container_name ?? "",
+      backend_container: initial.backend_container ?? "",
       port_mapping: initial.port_mapping ?? "",
       docker_network: (initial as any).docker_network ?? "",
       docker_run_extra_args: (initial as any).docker_run_extra_args ?? "--restart unless-stopped",
       vm_credential_id: String(initial.vm_credential_id ?? ""),
       repository_url: (initial as any).repository_url ?? "",
+      public_url: initial.public_url ?? "",
+      api_url: initial.api_url ?? "",
+      pipeline_profile: initial.pipeline_profile ?? "docker_full",
     } : {}),
   }));
   const [saving, setSaving] = useState(false);
+  const [profiles, setProfiles] = useState<{ id: string; label: string; steps: { id: string; label: string }[] }[]>([]);
+  const [ownership, setOwnership] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    getPipelineProfiles()
+      .then((res) => {
+        setProfiles(res.profiles || []);
+        setOwnership(res.default_ownership || null);
+      })
+      .catch(() => setProfiles([]));
+  }, []);
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -380,28 +434,62 @@ function DeploymentModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-gray-700/50 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700/40">
-          <h2 className="text-base font-semibold">{initial ? "Edit Deployment" : "New Deployment"}</h2>
+          <h2 className="text-base font-semibold">{initial ? "Edit Mission" : "New Mission"}</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors"><X size={16} /></button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 grid grid-cols-2 gap-4">
-          {field("Name", "name", "e.g. Demo Production LMS")}
-          {field("Project Name", "project_name", "e.g. lms-frontend")}
+          {field("Name", "name", "e.g. LMS Test (Mission Control)")}
+          {field("Project Name", "project_name", "e.g. lms-test")}
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-400 font-medium">Environment</label>
             <select value={form.environment} onChange={(e) => set("environment", e.target.value)}
               className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500/60">
-              {["production","staging","development"].map((e) => <option key={e} value={e}>{e}</option>)}
+              {["production","staging","development","test"].map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
           </div>
           {field("Branch", "branch", "main")}
+
+          <div className="col-span-2 border-t border-gray-800 pt-3">
+            <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-3">Flight Deck URLs</p>
+          </div>
+          {field("Public URL", "public_url", "https://lms-test.innovito.net/")}
+          {field("API URL", "api_url", "https://evolms-test.innovito.net/")}
+          <div className="col-span-2 flex flex-col gap-1">
+            <label className="text-xs text-gray-400 font-medium">Pipeline Profile</label>
+            <select value={form.pipeline_profile} onChange={(e) => set("pipeline_profile", e.target.value)}
+              className="bg-gray-800/60 border border-gray-700/50 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500/60">
+              {(profiles.length ? profiles : [
+                { id: "docker_full", label: "Docker Full" },
+                { id: "docker_remote_only", label: "Docker Remote Only" },
+                { id: "backend_pull_restart", label: "Backend Pull Restart" },
+                { id: "inspect_only", label: "Inspect Only" },
+              ]).map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            {form.pipeline_profile && (
+              <p className="text-[10px] text-gray-500 mt-1">
+                Steps: {(profiles.find((p) => p.id === form.pipeline_profile)?.steps || [])
+                  .map((s) => s.label)
+                  .join(" → ") || "loaded from API"}
+              </p>
+            )}
+          </div>
+          {ownership && (
+            <div className="col-span-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-cyan-100/80">
+              Ownership preview — Backend: AI + Clearance · Frontend: you (cloud) · DB: Clearance for migrate
+            </div>
+          )}
+
           <div className="col-span-2 border-t border-gray-800 pt-3">
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-3">Docker Configuration</p>
           </div>
-          {field("Docker Image (local build tag)", "docker_image", "harooney/docker-vue-lms-demo")}
-          {field("DockerHub Image", "dockerhub_image", "harooney/docker-vue-lms-demo")}
-          {field("DockerHub Tag", "dockerhub_tag", "latest or lms-vue-app")}
-          {field("Container Name", "container_name", "frontend-vue-app-demo")}
-          {field("Port Mapping", "port_mapping", "8082:80")}
+          {field("Docker Image (local build tag)", "docker_image", "harooney/docker-vue-lms-test")}
+          {field("DockerHub Image", "dockerhub_image", "harooney/docker-vue-lms-test")}
+          {field("DockerHub Tag", "dockerhub_tag", "lms-vue-app")}
+          {field("Frontend Container", "container_name", "frontend-vue-app-test")}
+          {field("Backend Container", "backend_container", "backend-evolms-test")}
+          {field("Port Mapping", "port_mapping", "8087:80")}
           {field("Dockerfile", "dockerfile", "Dockerfile")}
           {field("Build Platform", "build_platform", "linux/amd64")}
           {field("Docker Network", "docker_network", "")}
@@ -428,9 +516,9 @@ function DeploymentModal({
               Cancel
             </button>
             <button type="submit" disabled={saving}
-              className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+              className="flex-1 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold text-white transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
               {saving && <Loader2 size={14} className="animate-spin" />}
-              {initial ? "Save Changes" : "Create Deployment"}
+              {initial ? "Save Mission" : "Create Mission"}
             </button>
           </div>
         </form>
@@ -489,11 +577,33 @@ export default function DeploymentsPage() {
                 <Rocket size={20} className="text-indigo-400" />
               </div>
               <div>
-                <h1 className="text-xl font-bold">Deployments</h1>
-                <p className="text-xs text-gray-500">{deployments.length} configured</p>
+                <h1 className="text-xl font-bold">Mission Board</h1>
+                <p className="text-xs text-gray-500">
+                  {deployments.length} missions · Flight Deck scopes chat to one Mission
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  setSeeding(true);
+                  try {
+                    const { ensureLmsTestMission } = await import("@/lib/api");
+                    const res = await ensureLmsTestMission();
+                    alert(res.message + (res.created ? " (created)" : " (updated)"));
+                    refresh();
+                  } catch (e: any) {
+                    alert(e.message);
+                  } finally {
+                    setSeeding(false);
+                  }
+                }}
+                disabled={seeding}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-cyan-700/40 bg-cyan-900/20 text-cyan-300 text-sm hover:bg-cyan-900/30 transition-all disabled:opacity-50"
+              >
+                {seeding ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                Ensure LMS Test
+              </button>
               {deployments.length === 0 && (
                 <button onClick={handleSeed} disabled={seeding}
                   className="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-700/40 bg-indigo-900/20 text-indigo-300 text-sm hover:bg-indigo-900/30 transition-all disabled:opacity-50">
@@ -506,10 +616,15 @@ export default function DeploymentsPage() {
                 <RefreshCw size={15} />
               </button>
               <button onClick={() => { setEditTarget(null); setShowModal(true); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition-colors">
-                <Plus size={15} /> New Deployment
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold text-white transition-colors">
+                <Plus size={15} /> New Mission
               </button>
             </div>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-xs text-cyan-100/80">
+            <strong className="text-cyan-200">Ownership:</strong> Backend — AI may SSH + pull (Clearance for restarts).
+            Frontend — you build & deploy cloud. Shared VM: never touch sibling tenants; probe is read-only.
           </div>
 
           {/* Grid */}
@@ -518,9 +633,31 @@ export default function DeploymentsPage() {
               <Loader2 size={24} className="animate-spin mr-3" /> Loading…
             </div>
           ) : deployments.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
+            <div className="text-center py-20 text-gray-500 max-w-md mx-auto">
               <Rocket size={32} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm">No deployments yet. Create one or seed the defaults.</p>
+              <p className="text-sm text-gray-300 mb-1">No missions yet</p>
+              <p className="text-xs text-gray-500 mb-4">
+                Register LMS Test (DB only — VM untouched) or create a Mission. Flight Deck chat scopes to the active Mission.
+              </p>
+              <button
+                onClick={async () => {
+                  setSeeding(true);
+                  try {
+                    const { ensureLmsTestMission } = await import("@/lib/api");
+                    await ensureLmsTestMission();
+                    refresh();
+                  } catch (e: any) {
+                    alert(e.message);
+                  } finally {
+                    setSeeding(false);
+                  }
+                }}
+                disabled={seeding}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {seeding ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                Ensure LMS Test Mission
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

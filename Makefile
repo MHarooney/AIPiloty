@@ -34,11 +34,14 @@ fork:
 	bash code-oss-ide/scripts/run-dev.sh
 
 # Install Dock/Finder launcher: "AIPiloty IDE.app" → /Applications (symlink)
+# Also patches .build Electron so Dock pin opens the IDE (not blank Electron page)
 fork-app:
+	bash scripts/patch-electron-app.sh || true
 	bash scripts/install-desktop-app.sh
 
 # Same, but ~/Applications (no sudo)
 fork-app-user:
+	bash scripts/patch-electron-app.sh || true
 	bash scripts/install-desktop-app.sh --user
 
 # Step 3 (release): build standalone macOS .app (full gulp production build)

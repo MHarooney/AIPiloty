@@ -156,8 +156,12 @@ class Settings(BaseSettings):
     # can also be set via environment variables for server deployments.
     anthropic_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
-    # Provider priority chain (comma-separated). Default: claude,openai,gemini,ollama
-    provider_priority: str = "claude,openai,gemini,ollama"
+    # OpenRouter — unified OpenAI-compatible gateway (https://openrouter.ai)
+    openrouter_api_key: Optional[str] = None
+    openrouter_default_model: str = "openrouter/auto"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Provider priority chain (comma-separated). OpenRouter first when keyed.
+    provider_priority: str = "openrouter,claude,openai,gemini,ollama"
     # Seconds before a failed provider is retried (base; doubles on each failure)
     provider_backoff_seconds: int = 60
     # Max backoff cap in seconds

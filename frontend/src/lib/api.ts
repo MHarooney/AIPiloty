@@ -81,7 +81,8 @@ export function streamChat(
   autoApprove: boolean = false,
   model?: string | null,
   attachmentIds?: string[],
-  mode?: "ask" | "agent" | "auto" | null
+  mode?: "ask" | "agent" | "auto" | null,
+  missionId?: number | null
 ) {
   const url = `${API_BASE}/chat/stream`;
   const msg: Record<string, unknown> = { role: "user", content: message };
@@ -93,6 +94,7 @@ export function streamChat(
     mode: mode || "auto",
   };
   if (model) payload.model = model;
+  if (missionId != null) payload.mission_id = missionId;
   const body = JSON.stringify(payload);
 
   const MAX_RETRIES = 3;
@@ -266,6 +268,111 @@ export async function getDeploymentRun(id: number, runId: number) {
 export async function seedDeployments() {
   const res = await fetch(`${API_BASE}/deployments/seed/defaults`, { method: "POST", headers: headers() });
   return handleRes<{ created: string[]; skipped: string[] }>(res);
+}
+
+/* ── Mission Control / Flight Deck ── */
+
+export interface MissionStep {
+  id: string;
+  label: string;
+}
+
+export interface Mission {
+  id: number;
+  name: string;
+  project_name: string;
+  environment: string;
+  status: string;
+  public_url?: string | null;
+  api_url?: string | null;
+  branch?: string;
+  container_name?: string | null;
+  backend_container?: string | null;
+  dockerhub_image?: string | null;
+  dockerhub_tag?: string | null;
+  port_mapping?: string | null;
+  pipeline_profile?: string | null;
+  pipeline_steps?: MissionStep[];
+  ownership_summary?: { backend: string; frontend: string; database: string };
+  ai_can?: string[];
+  you_must?: string[];
+  vm?: { id?: number; name?: string; host_ip?: string; provider?: string; ssh_username?: string } | null;
+  vm_credential_id?: number | null;
+  last_deployed_at?: string | null;
+  error_message?: string | null;
+  notes?: string | null;
+}
+
+export interface MissionsSummary {
+  healthy: number;
+  needs_attention: number;
+  pending_deploys: number;
+  total: number;
+}
+
+export interface MissionEvidence {
+  type: string;
+  step: string;
+  status: string;
+  summary: string;
+  snippet?: string;
+  http_status?: number;
+  exit_code?: number;
+}
+
+export async function getMissions() {
+  const res = await fetch(`${API_BASE}/missions/`, { headers: headers() });
+  return handleRes<{ missions: Mission[]; summary: MissionsSummary }>(res);
+}
+
+export async function getMission(id: number) {
+  const res = await fetch(`${API_BASE}/missions/${id}`, { headers: headers() });
+  return handleRes<Mission>(res);
+}
+
+export async function probeMission(id: number) {
+  const res = await fetch(`${API_BASE}/missions/${id}/probe`, { headers: headers() });
+  return handleRes<{
+    mission: Mission;
+    health: string;
+    evidence: MissionEvidence[];
+    probed_at: string;
+    safe: boolean;
+    note: string;
+  }>(res);
+}
+
+export async function ensureLmsTestMission() {
+  const res = await fetch(`${API_BASE}/missions/ensure-lms-test`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ force_update: true }),
+  });
+  return handleRes<{ created: boolean; mission: Mission; message: string }>(res);
+}
+
+export async function getPipelineProfiles() {
+  const res = await fetch(`${API_BASE}/missions/profiles`, { headers: headers() });
+  return handleRes<{
+    profiles: { id: string; label: string; steps: MissionStep[] }[];
+    default_ownership: Record<string, unknown>;
+  }>(res);
+}
+
+export async function clearanceCheck(missionId: number, action: string) {
+  const res = await fetch(`${API_BASE}/missions/${missionId}/clearance-check`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ action }),
+  });
+  return handleRes<{
+    mission_id: number;
+    action: string;
+    requires_clearance: boolean;
+    risk: string;
+    lane: string;
+    actor: string;
+  }>(res);
 }
 
 /** SSE pipeline run — streams progress events until [DONE] */
@@ -457,6 +564,7 @@ export async function updateConfig(data: {
   anthropic_api_key?: string;
   openai_api_key?: string;
   gemini_api_key?: string;
+  openrouter_api_key?: string;
   provider_priority?: string;
 }) {
   const res = await fetch(`${API_BASE}/config/`, { method: "POST", headers: headers(), body: JSON.stringify(data) });
@@ -473,6 +581,7 @@ export interface LlmProvidersConfig {
   active: string;
   chain: string[];
   providers: {
+    openrouter?: LlmProviderStatus;
     claude: LlmProviderStatus;
     openai: LlmProviderStatus;
     gemini: LlmProviderStatus;
@@ -538,6 +647,28 @@ export async function deleteImageProvider(provider: string) {
     headers: headers(),
   });
   return handleRes<{ success: boolean }>(res);
+}
+
+export interface LlmModelOption {
+  id: string;
+  label: string;
+  description?: string;
+  provider: string;
+  is_default?: boolean;
+}
+
+export interface LlmModelsCatalog {
+  default: string;
+  models: LlmModelOption[];
+  configured_providers: string[];
+  fallback?: string;
+  priority_hint?: string;
+}
+
+/** Full chat model catalog (Auto + OpenRouter + cloud + local Ollama). */
+export async function listLlmModels(): Promise<LlmModelsCatalog> {
+  const res = await fetch(`${API_BASE}/config/llm-models`, { headers: headers() });
+  return handleRes<LlmModelsCatalog>(res);
 }
 
 export async function listModels() {

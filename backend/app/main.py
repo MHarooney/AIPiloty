@@ -474,6 +474,7 @@ def create_app() -> FastAPI:
     from .api.v1.config import router as config_router
     from .api.v1.database import router as database_router
     from .api.v1.deployments import router as deploy_router
+    from .api.v1.missions import router as missions_router
     from .api.v1.files import router as files_router
     from .api.v1.health import router as health_router
     from .api.v1.knowledge import router as knowledge_router
@@ -504,6 +505,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(deploy_router, prefix="/api/v1")
+    app.include_router(missions_router, prefix="/api/v1")
     app.include_router(vms_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")
     app.include_router(knowledge_router, prefix="/api/v1")

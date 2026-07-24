@@ -34,6 +34,14 @@ import { toast } from "sonner";
 // ── LLM provider definitions ──────────────────────────────────────────────────
 const LLM_PROVIDERS = [
   {
+    id: "openrouter",
+    name: "OpenRouter",
+    hint: "openrouter.ai → API keys (default cloud route)",
+    placeholder: "sk-or-…",
+    configKey: "openrouter_api_key",
+    priority: 0,
+  },
+  {
     id: "claude",
     name: "Anthropic Claude",
     hint: "console.anthropic.com → API keys",
@@ -95,13 +103,13 @@ export default function SettingsPage() {
 
   // LLM chat provider state (Claude / OpenAI / Gemini for agent chat)
   const [llmKeyDrafts, setLlmKeyDrafts] = useState<Record<string, string>>({
-    claude: "", openai: "", gemini: "",
+    openrouter: "", claude: "", openai: "", gemini: "",
   });
   const [llmKeySaved, setLlmKeySaved] = useState<Record<string, boolean>>({});
   const [llmSaving, setLlmSaving] = useState<Record<string, boolean>>({});
   const [showLlmKeys, setShowLlmKeys] = useState<Record<string, boolean>>({});
   const [llmHealth, setLlmHealth] = useState<LlmProvidersConfig | null>(null);
-  const [providerPriority, setProviderPriority] = useState("claude,openai,gemini,ollama");
+  const [providerPriority, setProviderPriority] = useState("openrouter,claude,openai,gemini,ollama");
   const [savingPriority, setSavingPriority] = useState(false);
 
 
@@ -116,16 +124,18 @@ export default function SettingsPage() {
         setLlmHealth(llm);
         if (llm.priority) setProviderPriority(llm.priority);
         setLlmKeySaved({
+          openrouter: !!llm.providers?.openrouter?.configured,
           claude: !!llm.providers?.claude?.configured,
           openai: !!llm.providers?.openai?.configured,
           gemini: !!llm.providers?.gemini?.configured,
         });
       } else if (health) {
         setLlmHealth({
-          priority: "claude,openai,gemini,ollama",
+          priority: "openrouter,claude,openai,gemini,ollama",
           active: health.active,
           chain: health.chain,
           providers: {
+            openrouter: { configured: false },
             claude: { configured: false },
             openai: { configured: false },
             gemini: { configured: false },
@@ -380,7 +390,7 @@ export default function SettingsPage() {
 
             <div className="rounded-lg border border-gray-800/60 bg-gray-950/40 p-3 space-y-2">
               <label className="text-[10px] text-gray-500 block">
-                Priority order (comma-separated: claude, openai, gemini, ollama)
+                Priority order (comma-separated: openrouter, claude, openai, gemini, ollama)
               </label>
               <div className="flex gap-2">
                 <input
@@ -388,7 +398,7 @@ export default function SettingsPage() {
                   value={providerPriority}
                   onChange={(e) => setProviderPriority(e.target.value)}
                   className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-violet-500"
-                  placeholder="claude,openai,gemini,ollama"
+                  placeholder="openrouter,claude,openai,gemini,ollama"
                 />
                 <button
                   type="button"
@@ -402,10 +412,10 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               {LLM_PROVIDERS.map((provider) => {
                 const configured = !!llmKeySaved[provider.id];
-                const hint = llmHealth?.providers?.[provider.id as "claude" | "openai" | "gemini"]?.key_hint;
+                const hint = llmHealth?.providers?.[provider.id as keyof typeof llmHealth.providers]?.key_hint;
                 return (
                   <div key={provider.id} className="rounded-xl border border-gray-800/60 bg-gray-950/50 p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">

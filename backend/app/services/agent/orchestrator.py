@@ -84,6 +84,42 @@ def _load_project_rules(max_chars: int = 2000) -> str:
             continue
     return ""
 
+
+_ATTACHED_CONTEXT_MARKERS = (
+    "ATTACHED CONTEXT (sole source of truth",
+    "CONTEXT SCOPE — MANDATORY",
+)
+
+
+def _ide_attached_context_scope(messages: list[dict[str, Any]]) -> Optional[str]:
+    """Hard scope when the desktop IDE @ / drag-dropped files/folders."""
+    scope_bits: list[str] = []
+    has_attached = False
+    for m in messages:
+        content = str(m.get("content") or "")
+        if not content:
+            continue
+        if m.get("role") == "system" and "CONTEXT SCOPE" in content:
+            scope_bits.append(content.strip())
+            has_attached = True
+        elif any(marker in content for marker in _ATTACHED_CONTEXT_MARKERS):
+            has_attached = True
+    if not has_attached:
+        return None
+    body = "\n\n".join(dict.fromkeys(scope_bits)) if scope_bits else (
+        "The user attached specific file(s)/folder(s) via @ or drag-and-drop.\n"
+        "Answer ONLY about those attached items.\n"
+        "Ignore the open IDE workspace root and sibling folders.\n"
+        "\"This project\" means the attached folder/file, not the whole workspace.\n"
+        "Do not use tools to explore paths outside the attached items unless asked."
+    )
+    return (
+        "\n\n═══ USER-ATTACHED CONTEXT SCOPE (MANDATORY) ═══\n"
+        + body
+        + "\n═══ END ATTACHED CONTEXT SCOPE ═══"
+    )
+
+
 # ── Tool-call parsing patterns (multi-layer, like the old platform) ──────
 
 # Pattern 1: ```json\n{...}\n``` or ```tool_call\n{...}\n```
@@ -294,6 +330,8 @@ IMPORTANT RULES:
 - If the user asks for an image and did not name a model, call **generate_image** with the prompt only (omit model).
 - If the tool returns ``needs_model_choice``: reply with **one short line** only, e.g. "Choose an image model below." Do **not** list model ids or ask them to type gpt-image-1 — the UI shows clickable choices.
 - If ``needs_api_key``: tell them to open Settings → Image Providers (one short line).
+- After the user/UI picks a model (message contains model id like gpt-image-1 / dall-e-3 / nano-banana): call **generate_image** again with ``prompt`` + ``model`` only. Do **not** pass width/height/steps (or never pass null) — defaults apply.
+- On generate_image error: retry **once** with only prompt+model. Do **NOT** call web_search, generate_pdf, generate_docx, generate_pptx, or invent other tools for an image request. Explain the error briefly if the retry fails.
 - Aliases when the user names one: "dalle"/"dalle-3" → dall-e-3, "nano banana" → gemini flash image, "imagen" → imagen-3.
 
 ═══ RICH VISUALS IN CHAT (CRITICAL) ═══
@@ -782,9 +820,12 @@ class AgentOrchestrator:
         model: str | None = None,
         session_key: str | None = None,    # Phase 3: for episodic episode tagging
         mode: str = "auto",                # ask | agent | auto | plan | debug
+        mission_context: str | None = None,  # Flight Deck active mission block
     ) -> AsyncGenerator[SSEEvent, None]:
         """Execute the ReAct agent loop, yielding SSE events."""
         kwargs = {"session_key": session_key}
+        if mission_context:
+            kwargs["mission_context"] = mission_context
 
         # Extract latest user question early (routing + episodic recall)
         _latest_user_msg = next(
@@ -937,6 +978,42 @@ class AgentOrchestrator:
         except Exception:
             pass
 
+        # IDE @ / drag-drop: prefer answering from inlined attachment (no workspace tools)
+        # unless the user clearly wants edits/runs inside that scope.
+        _attach_for_route = _ide_attached_context_scope(safe_messages)
+        if (
+            _attach_for_route
+            and _routed.route == MessageRoute.AGENT_TASK
+            and (_routed.mode or "").lower() != "plan"
+        ):
+            _ul = str(_latest_user_msg or "").lower()
+            _wants_mutation = any(
+                k in _ul
+                for k in (
+                    "edit ",
+                    "fix ",
+                    "implement",
+                    "refactor",
+                    "create ",
+                    "write ",
+                    "delete ",
+                    "run ",
+                    "apply ",
+                    "patch ",
+                    "generate ",
+                )
+            )
+            if not _wants_mutation:
+                _routed = type(_routed)(
+                    route=MessageRoute.GENERAL_QA,
+                    normalized=_routed.normalized,
+                    intent=_routed.intent,
+                    static_reply=None,
+                    reason="attached_context_qa",
+                    confirmation=_routed.confirmation,
+                    mode=_routed.mode,
+                )
+
         if _routed.route == MessageRoute.SMALLTALK:
             yield SSEEvent(
                 "token",
@@ -1062,10 +1139,15 @@ class AgentOrchestrator:
             chat_prompt = chat_system_prompt(
                 diagram=_is_diagram, table=_is_table
             ) + _deployment_llm_section(self._llm)
+            if mission_context:
+                chat_prompt += "\n\n" + mission_context
             if self._memory and self._memory.size > 0:
                 mem_context = self._memory.get_context_summary(max_entries=5)
                 if mem_context:
                     chat_prompt += f"\n\n{mem_context}"
+            _attach_scope = _ide_attached_context_scope(safe_messages)
+            if _attach_scope:
+                chat_prompt += _attach_scope
             chat_conversation: list[dict[str, Any]] = [
                 {"role": "system", "content": chat_prompt},
             ] + safe_messages
@@ -1208,6 +1290,17 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.warning("Failed to fetch VM context: %s", e)
 
+        if mission_context:
+            system_prompt += "\n\n" + mission_context
+            yield SSEEvent(
+                "log",
+                {
+                    "level": "info",
+                    "message": "Flight Deck — ACTIVE MISSION scope injected",
+                    "timestamp": 0,
+                },
+            )
+
         if self._memory and self._memory.size > 0:
             mem_context = self._memory.get_context_summary(max_entries=10)
             if mem_context:
@@ -1216,13 +1309,19 @@ class AgentOrchestrator:
         # ── Project rules (Phase 2) ────────────────────────────────────────
         # Read .aipiloty/rules or AGENTS.md from workspace root and inject as
         # project-specific system context (max 2 000 chars to avoid bloat).
-        _project_rules = _load_project_rules()
-        if _project_rules:
-            system_prompt += (
-                "\n\n═══ PROJECT RULES (from workspace AGENTS.md / .aipiloty/rules) ═══\n"
-                + _project_rules
-                + "\n═══ END PROJECT RULES ═══"
-            )
+        # Skip when the user attached a specific folder/file — workspace rules
+        # describe the open IDE root and would override the attachment scope.
+        _attach_scope = _ide_attached_context_scope(safe_messages)
+        if _attach_scope:
+            system_prompt += _attach_scope
+        else:
+            _project_rules = _load_project_rules()
+            if _project_rules:
+                system_prompt += (
+                    "\n\n═══ PROJECT RULES (from workspace AGENTS.md / .aipiloty/rules) ═══\n"
+                    + _project_rules
+                    + "\n═══ END PROJECT RULES ═══"
+                )
 
         _working_mem = WorkingMemory()
         if self._episodic and _latest_user_msg:
@@ -1696,6 +1795,10 @@ class AgentOrchestrator:
                 tool_args = apply_user_image_model_choice(
                     tool_args, str(_latest_user_msg or "")
                 )
+                # LLMs often send width/height: null — drop so tool defaults apply
+                for _k in ("width", "height", "steps"):
+                    if tool_args.get(_k) is None:
+                        tool_args.pop(_k, None)
 
             # Stuck detection — same tool+args seen 3 times = break
             fingerprint = json.dumps({"t": tool_name, "a": tool_args}, sort_keys=True)

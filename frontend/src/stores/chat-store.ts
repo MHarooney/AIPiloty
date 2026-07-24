@@ -1,7 +1,17 @@
 import { create } from "zustand";
+import { toast } from "sonner";
 import { notifyToolStart, notifyToolDone, notifyToolError } from "@/lib/notifications";
 import { streamChat } from "@/lib/api";
 import { repairMermaidFencesInMarkdown } from "@/lib/repair-mermaid";
+import { useMissionStore } from "@/stores/mission-store";
+
+function activeMissionId(): number | null {
+  try {
+    return useMissionStore.getState().activeMission?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════
    TYPE DEFINITIONS
@@ -158,6 +168,9 @@ interface ChatState {
 
   /* ── Chat mode ── */
   chatMode: ChatMode;
+  /** LLM model id for streamChat (`auto` or `provider:model`). */
+  selectedModel: string;
+  selectedModelLabel: string;
 
   /* ── AI OS state extensions ── */
   systemState: SystemState;
@@ -191,6 +204,7 @@ interface ChatState {
   setIntensityLevel: (level: number) => void;
   setApprovalSettings: (settings: Partial<ApprovalSettings>) => void;
   setChatMode: (mode: ChatMode) => void;
+  setSelectedModel: (id: string, label?: string) => void;
   addPendingAttachment: (att: ChatAttachment) => void;
   removePendingAttachment: (id: string) => void;
   clearPendingAttachments: () => void;
@@ -274,6 +288,34 @@ function saveApprovalSettings(settings: ApprovalSettings): void {
   }
 }
 
+const MODEL_STORAGE_KEY = "aipiloty_chat_model";
+const MODEL_LABEL_STORAGE_KEY = "aipiloty_chat_model_label";
+
+function loadSelectedModel(): { id: string; label: string } {
+  if (typeof window === "undefined") {
+    return { id: "auto", label: "Auto (OpenRouter → Local)" };
+  }
+  try {
+    const id = localStorage.getItem(MODEL_STORAGE_KEY) || "auto";
+    const label =
+      localStorage.getItem(MODEL_LABEL_STORAGE_KEY) ||
+      (id === "auto" ? "Auto (OpenRouter → Local)" : id);
+    return { id, label };
+  } catch {
+    return { id: "auto", label: "Auto (OpenRouter → Local)" };
+  }
+}
+
+function saveSelectedModel(id: string, label: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(MODEL_STORAGE_KEY, id);
+    localStorage.setItem(MODEL_LABEL_STORAGE_KEY, label);
+  } catch {
+    /* ignore */
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════
    STORE
    ═══════════════════════════════════════════════════════════ */
@@ -289,6 +331,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   executionTimeline: [],
   pendingAttachments: [],
   chatMode: "agent" as ChatMode,
+  selectedModel: loadSelectedModel().id,
+  selectedModelLabel: loadSelectedModel().label,
 
   /* ── AI OS defaults ── */
   systemState: "idle" as SystemState,
@@ -427,6 +471,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setChatMode: (mode) => set({ chatMode: mode }),
 
+  setSelectedModel: (id, label) => {
+    const nextLabel = label || (id === "auto" ? "Auto (OpenRouter → Local)" : id);
+    saveSelectedModel(id, nextLabel);
+    set({ selectedModel: id, selectedModelLabel: nextLabel });
+  },
+
   addPendingAttachment: (att) =>
     set((s) => ({ pendingAttachments: [...s.pendingAttachments, att] })),
 
@@ -523,6 +573,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }));
         break;
 
+      case "mission_context":
+        // Flight Deck: keep runway/ownership in sync with chat-scoped mission
+        if (data?.id != null) {
+          useMissionStore.getState().selectMissionById(Number(data.id));
+        }
+        break;
+
       case "risk_analysis":
         state.setAvatarPhase("analyzing_risk");
         state.setIntensityLevel(0.7);
@@ -537,6 +594,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             },
           ],
         }));
+        if (String(data.risk_level || "").toLowerCase() === "high") {
+          useMissionStore.getState().requestClearance({
+            action: data.tool || data.action || "high_risk_action",
+            why: data.explanation || "High-risk operation requires Clearance",
+            risk: "high",
+            impact: (data.affected_resources || []).join(", ") || undefined,
+            lane: data.lane,
+          });
+        }
         break;
 
       case "token":
@@ -704,6 +770,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           name: data.tool,
           arguments: data.arguments || {},
         });
+        useMissionStore.getState().requestClearance({
+          action: data.tool || "tool_execution",
+          why: data.explanation || "Agent requests approval before executing",
+          risk: (data.risk_level === "medium" ? "medium" : "high") as "medium" | "high",
+          impact: (data.affected_resources || []).slice(0, 4).join(", ") || undefined,
+          lane: data.lane,
+        });
         break;
 
       case "final_report": {
@@ -724,18 +797,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       case "provider_switched":
-        // ProviderRouter switched LLM provider mid-session — show in background logs
-        set((s) => ({
-          backgroundLogs: [
-            ...s.backgroundLogs.slice(-99),
-            {
-              id: newId(),
-              level: "warn" as const,
-              message: `LLM switched: ${data.from} → ${data.to} (reason: ${data.reason})`,
-              timestamp: Date.now(),
-            },
-          ],
-        }));
+        // ProviderRouter switched LLM provider mid-session — toast + background logs
+        {
+          const from = String(data.from ?? "cloud");
+          const to = String(data.to ?? "ollama");
+          const reason = String(data.reason ?? "failover");
+          toast.warning(`Switched to ${to}`, {
+            description: `${from} unavailable — using local fallback (${reason})`,
+            duration: 5000,
+          });
+          set((s) => ({
+            backgroundLogs: [
+              ...s.backgroundLogs.slice(-99),
+              {
+                id: newId(),
+                level: "warn" as const,
+                message: `LLM switched: ${from} → ${to} (reason: ${reason})`,
+                timestamp: Date.now(),
+              },
+            ],
+          }));
+        }
         break;
 
       case "provider_health":
@@ -809,9 +891,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       state.handleSSEEvent,
       undefined,
       true, // auto_approve
+      state.selectedModel === "auto" ? null : state.selectedModel,
       undefined,
-      undefined,
-      state.chatMode
+      state.chatMode,
+      activeMissionId()
     );
   },
 
@@ -835,7 +918,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     // Clear backend pending action via CONFIRMATION deny route
-    streamChat("no", state.sessionKey, state.handleSSEEvent, undefined, false, undefined, undefined, state.chatMode);
+    streamChat("no", state.sessionKey, state.handleSSEEvent, undefined, false, state.selectedModel === "auto" ? null : state.selectedModel, undefined, state.chatMode, activeMissionId());
   },
 
   /* ── Retry / quick-prompts ── */
@@ -870,7 +953,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return { messages: m };
     });
-    streamChat(lastUser, store.ensureSessionKey(), store.handleSSEEvent, undefined, false, undefined, undefined, store.chatMode);
+    streamChat(lastUser, store.ensureSessionKey(), store.handleSSEEvent, undefined, false, store.selectedModel === "auto" ? null : store.selectedModel, undefined, store.chatMode, activeMissionId());
   },
 
   sendQuickPrompt: (prompt: string) => {
@@ -878,7 +961,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (state.isStreaming) return;
     const key = state.ensureSessionKey();
     state.addUserMessage(prompt);
-    streamChat(prompt, key, state.handleSSEEvent, undefined, false, undefined, undefined, state.chatMode);
+    useMissionStore.getState().detectIncidentFromText(prompt);
+    streamChat(prompt, key, state.handleSSEEvent, undefined, false, state.selectedModel === "auto" ? null : state.selectedModel, undefined, state.chatMode, activeMissionId());
   },
 
   /* ── Reset / load ── */

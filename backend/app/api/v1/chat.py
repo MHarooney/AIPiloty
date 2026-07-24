@@ -147,23 +147,70 @@ async def chat_stream(
         _cancel_events[session_key] = cancel_event
 
         try:
-            # Phase 5: model routing — auto-select fast/smart/coder model
-            # Use lazy import inside function to avoid circular import at module level
+            # Model selection from desktop picker:
+            # - auto / empty → ProviderRouter failover (do NOT force Ollama ModelRouter
+            #   when a cloud provider is configured — that would send ollama ids to OR)
+            # - provider:model → pinned provider + model hint
             model_override = req.model
+            if model_override is not None and str(model_override).strip().lower() in (
+                "",
+                "auto",
+            ):
+                model_override = None
+
             if not model_override:
                 try:
                     from ...main import app_state as _app_state
-                    _model_router = _app_state.get("model_router")
-                    if _model_router is not None:
-                        _last_msg = next(
-                            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
-                            "",
-                        )
-                        _decision = _model_router.route(str(_last_msg))
-                        model_override = _decision.model
-                        logger.debug("ModelRouter: %s → %s", _decision.complexity, _decision.model)
+
+                    _router = _app_state.get("provider_router")
+                    _has_cloud = bool(
+                        _router
+                        and any(a.name != "ollama" for a in getattr(_router, "chain", []))
+                    )
+                    if not _has_cloud:
+                        _model_router = _app_state.get("model_router")
+                        if _model_router is not None:
+                            _last_msg = next(
+                                (
+                                    m.get("content", "")
+                                    for m in reversed(messages)
+                                    if m.get("role") == "user"
+                                ),
+                                "",
+                            )
+                            _decision = _model_router.route(str(_last_msg))
+                            model_override = _decision.model
+                            logger.debug(
+                                "ModelRouter: %s → %s",
+                                _decision.complexity,
+                                _decision.model,
+                            )
                 except Exception:
                     pass  # graceful: fall back to no model override
+
+            # Resolve active Mission (Flight Deck scope) — dynamic from DB
+            mission_context = None
+            if req.mission_id:
+                try:
+                    from ...models.deployment import Deployment
+                    from ...services.mission.context import (
+                        build_mission_prompt_block,
+                        mission_to_flight_deck,
+                    )
+                    from sqlalchemy.orm import selectinload
+
+                    mres = await db.execute(
+                        select(Deployment)
+                        .options(selectinload(Deployment.vm_credential))
+                        .where(Deployment.id == int(req.mission_id))
+                    )
+                    mdep = mres.scalar_one_or_none()
+                    if mdep:
+                        mission_dto = mission_to_flight_deck(mdep, mdep.vm_credential)
+                        mission_context = build_mission_prompt_block(mission_dto)
+                        yield f"data: {json.dumps({'type': 'mission_context', 'data': mission_dto})}\n\n"
+                except Exception as mexc:
+                    logger.warning("Mission context load failed: %s", mexc)
 
             async for event in orchestrator.run(
                 messages,
@@ -171,6 +218,7 @@ async def chat_stream(
                 model=model_override,
                 session_key=session_key,
                 mode=(req.mode or "auto"),
+                mission_context=mission_context,
             ):
                 # Check for client-requested cancellation before yielding each event
                 if cancel_event.is_set():
